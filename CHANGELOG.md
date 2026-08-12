@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - 2026-08-12
+
+- Preserve each project's existing native `card_mode` instead of forcing the
+  legacy renderer. This keeps native Rich Card behavior available as fallback.
+
 ## 0.1.0 - 2026-08-12
 
 - First zero-host-change companion-plugin MVP.

@@ -71,14 +71,12 @@ test("renderConfigForInstall preserves native config and adds only supported ove
     assert.deepEqual(
       {
         mode: display.mode,
-        card_mode: display.card_mode,
         thinking_messages: display.thinking_messages,
         tool_messages: display.tool_messages,
         reply_footer: display.reply_footer,
       },
       {
         mode: "quiet",
-        card_mode: "legacy",
         thinking_messages: false,
         tool_messages: false,
         reply_footer: false,
@@ -99,6 +97,8 @@ test("renderConfigForInstall preserves native config and adds only supported ove
   const stream = parsed.stream_preview as Record<string, unknown>;
   assert.deepEqual(stream.disabled_platforms, ["telegram", "feishu", "lark"]);
   assert.match(rendered.text, /reply_to_trigger = true/);
+  assert.equal((projects[0]?.display as Record<string, unknown>).card_mode, undefined);
+  assert.equal((parsed.display as Record<string, unknown>).card_mode, "rich");
   assert.match(rendered.text, /\[log\]\nlevel = "info"/);
 });
 

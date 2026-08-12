@@ -1,0 +1,55 @@
+{
+  "name": "cc-connect-feishu-plus",
+  "version": "0.1.0",
+  "description": "Zero-host-change Feishu rich-card companion plugin for CC Connect",
+  "type": "module",
+  "bin": {
+    "cc-connect-feishu-plus": "dist/cli.js"
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.js.map",
+    "dist/*.d.ts",
+    "dist/*.d.ts.map",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "prepare": "npm run build",
+    "prepack": "npm run test"
+  },
+  "keywords": [
+    "cc-connect",
+    "feishu",
+    "lark",
+    "mcp",
+    "rich-card"
+  ],
+  "author": "timmyagentic",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/timmyagentic/cc-connect-feishu-plus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/timmyagentic/cc-connect-feishu-plus/issues"
+  },
+  "homepage": "https://github.com/timmyagentic/cc-connect-feishu-plus#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "smol-toml": "1.8.0",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}

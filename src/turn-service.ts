@@ -10,7 +10,7 @@ import {
 } from "./card.js";
 import { sendMarkdownThroughCCConnect } from "./cc-api.js";
 import { loadProjectConfig } from "./config.js";
-import { FeishuClient } from "./feishu.js";
+import { FeishuClient, type ChatMessageSnapshot } from "./feishu.js";
 import { TurnStateStore } from "./state.js";
 import type {
   ActivityPhase,
@@ -29,6 +29,7 @@ export interface RuntimeContext {
   project: string;
   sessionKey: string;
   chatId: string;
+  userId?: string;
 }
 
 export interface BeginResult {
@@ -57,7 +58,12 @@ export function runtimeContext(
   if ((parts[0] !== "feishu" && parts[0] !== "lark") || !parts[1]) {
     return undefined;
   }
-  return { project, sessionKey, chatId: parts[1] };
+  return {
+    project,
+    sessionKey,
+    chatId: parts[1],
+    ...(parts[2] ? { userId: parts[2] } : {}),
+  };
 }
 
 function markerFor(turnId: string): string {
@@ -140,8 +146,9 @@ export class TurnService {
 
       const project = await this.loadProject(context.project);
       const client = this.createClient(project);
+      let snapshot: ChatMessageSnapshot;
       try {
-        await client.checkChatHistoryAccess(context.chatId);
+        snapshot = await client.captureMessageSnapshot(context.chatId, context.userId);
       } catch (error) {
         return {
           active: false,
@@ -166,7 +173,11 @@ export class TurnService {
       });
 
       try {
-        const messageId = await client.findMessageByMarker(context.chatId, marker);
+        const messageId = await client.findPlaceholderMessage(
+          context.chatId,
+          marker,
+          snapshot,
+        );
         const cardId = await client.convertMessageToCard(messageId);
         const state: TurnState = {
           version: 1,

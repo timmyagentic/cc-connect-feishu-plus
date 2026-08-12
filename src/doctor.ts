@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
+import { codexMcpContextEnvIsConfigured } from "./codex-mcp.js";
 import { parseConfig } from "./config.js";
 import { discoverHostBinary, versionAtLeast } from "./host-integrity.js";
 import { configPath as defaultConfigPath, manifestPath, socketPath } from "./paths.js";
@@ -83,6 +84,17 @@ export async function doctor(
         sha256(configBytes) === manifest.configAfterSha256
           ? "managed config is unchanged"
           : "config changed after plugin installation",
+    });
+  }
+
+  if (manifest?.projects.some((project) => project.agentType === "codex")) {
+    const configured = await codexMcpContextEnvIsConfigured(env);
+    checks.push({
+      name: "codex-mcp-context-env",
+      ok: configured,
+      detail: configured
+        ? "CC_PROJECT and CC_SESSION_KEY are forwarded to the Codex MCP process"
+        : "Codex MCP env_vars must include CC_PROJECT and CC_SESSION_KEY",
     });
   }
 

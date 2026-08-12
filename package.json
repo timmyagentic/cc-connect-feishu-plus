@@ -1,6 +1,6 @@
 {
   "name": "cc-connect-feishu-plus",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Zero-host-change Feishu rich-card companion plugin for CC Connect",
   "type": "module",
   "bin": {

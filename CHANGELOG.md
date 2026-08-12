@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 - 2026-08-12
+
+- Forward CC Connect's per-turn `CC_PROJECT` and `CC_SESSION_KEY` variables to
+  the Codex MCP process through the supported `env_vars` whitelist.
+- Add a doctor check that fails when dynamic Feishu turn context cannot reach
+  the plugin.
+- Resolve Card 2.0 placeholders from a before-send history snapshot and quoted
+  reply relationship, because Feishu redacts Card 2.0 body content in message
+  history responses.
+
 ## 0.1.1 - 2026-08-12
 
 - Preserve each project's existing native `card_mode` instead of forcing the

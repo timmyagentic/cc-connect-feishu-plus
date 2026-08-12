@@ -16,12 +16,23 @@ class FakeClient {
 
   constructor(private readonly cardId: string | undefined) {}
 
-  async checkChatHistoryAccess(): Promise<number> {
-    return 1;
+  async captureMessageSnapshot(): Promise<{
+    messageIds: ReadonlySet<string>;
+    triggerMessageId: string;
+  }> {
+    return {
+      messageIds: new Set(["om_trigger"]),
+      triggerMessageId: "om_trigger",
+    };
   }
 
-  async findMessageByMarker(_chatId: string, marker: string): Promise<string> {
+  async findPlaceholderMessage(
+    _chatId: string,
+    marker: string,
+    snapshot: { messageIds: ReadonlySet<string>; triggerMessageId?: string },
+  ): Promise<string> {
     assert.match(marker, /^ccfp-/);
+    assert.equal(snapshot.triggerMessageId, "om_trigger");
     return "om_message";
   }
 
@@ -56,7 +67,12 @@ const project: ProjectRuntimeConfig = {
 test("runtimeContext activates only inherited Feishu/Lark CC sessions", () => {
   assert.deepEqual(
     runtimeContext({ CC_PROJECT: "demo", CC_SESSION_KEY: "feishu:oc_chat:ou_user" }),
-    { project: "demo", sessionKey: "feishu:oc_chat:ou_user", chatId: "oc_chat" },
+    {
+      project: "demo",
+      sessionKey: "feishu:oc_chat:ou_user",
+      chatId: "oc_chat",
+      userId: "ou_user",
+    },
   );
   assert.equal(
     runtimeContext({ CC_PROJECT: "demo", CC_SESSION_KEY: "telegram:123:456" }),

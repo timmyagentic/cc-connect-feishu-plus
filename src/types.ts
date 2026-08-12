@@ -43,6 +43,7 @@ export interface InstallManifest {
   version: 1;
   packageVersion: string;
   installedAt: string;
+  updatedAt?: string;
   configPath: string;
   backupPath: string;
   configBeforeSha256: string;

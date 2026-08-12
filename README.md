@@ -102,9 +102,9 @@ npx --yes cc-connect-feishu-plus@0.1.2 install
 
 1. Agent 每回合先调用 `turn_begin`。
 2. 插件读取 CC Connect 继承下来的项目与会话上下文，并确认这是 Feishu/Lark 会话。
-3. 插件先做只读历史消息权限检查；通过后才调用 CC Connect 本地 `/send`。
-4. CC Connect 使用原生飞书适配器发出带隐藏唯一标记的占位卡片，因此引用原始提问。
-5. 插件通过历史消息 API 找回这条卡片的 `message_id`。
+3. 插件先做只读历史消息快照；通过后才调用 CC Connect 本地 `/send`。
+4. CC Connect 使用原生飞书适配器发出占位卡片，因此引用原始提问。
+5. 插件通过快照差异、机器人发送者和引用关系找回新增卡片的 `message_id`；若历史 API 暴露正文，也保留隐藏唯一标记作为兼容路径。
 6. 能取得 `card_id` 时使用 CardKit；否则使用 `message_id` PATCH，同一消息不会被替换成另一条回复。
 7. Agent 可用 `turn_activity` 更新安全阶段，用 `turn_write` 追加最终正文片段。
 8. `turn_complete` 写入完整答案并切换为 `✅ Done`；Agent 最终只向 CC Connect 返回 `NO_REPLY`，避免第二条原生答案。

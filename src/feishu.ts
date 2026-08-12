@@ -12,7 +12,17 @@ interface FeishuEnvelope<T> {
 interface MessageItem {
   message_id?: string;
   msg_type?: string;
+  parent_id?: string;
+  sender?: {
+    id?: string;
+    sender_type?: string;
+  };
   body?: { content?: string };
+}
+
+export interface ChatMessageSnapshot {
+  messageIds: ReadonlySet<string>;
+  triggerMessageId?: string;
 }
 
 interface TokenResponse {
@@ -102,47 +112,71 @@ export class FeishuClient {
     return body.data as T;
   }
 
-  async findMessageByMarker(
-    chatId: string,
-    marker: string,
-    attempts = 10,
-  ): Promise<string> {
+  private async recentMessages(chatId: string, pageSize: number): Promise<MessageItem[]> {
     const query = new URLSearchParams({
       container_id_type: "chat",
       container_id: chatId,
       sort_type: "ByCreateTimeDesc",
-      page_size: "50",
-    });
-
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const data = await this.request<{ items?: MessageItem[] }>(
-        `/open-apis/im/v1/messages?${query.toString()}`,
-        { method: "GET" },
-      );
-      const match = data.items?.find(
-        (item) =>
-          item.msg_type === "interactive" &&
-          typeof item.body?.content === "string" &&
-          item.body.content.includes(marker),
-      );
-      if (match?.message_id) return match.message_id;
-      if (attempt + 1 < attempts) await delay(250);
-    }
-    throw new Error("could not resolve the placeholder Feishu message id");
-  }
-
-  async checkChatHistoryAccess(chatId: string): Promise<number> {
-    const query = new URLSearchParams({
-      container_id_type: "chat",
-      container_id: chatId,
-      sort_type: "ByCreateTimeDesc",
-      page_size: "1",
+      page_size: String(pageSize),
     });
     const data = await this.request<{ items?: MessageItem[] }>(
       `/open-apis/im/v1/messages?${query.toString()}`,
       { method: "GET" },
     );
-    return data.items?.length ?? 0;
+    return data.items ?? [];
+  }
+
+  async captureMessageSnapshot(
+    chatId: string,
+    userId?: string,
+  ): Promise<ChatMessageSnapshot> {
+    const items = await this.recentMessages(chatId, 50);
+    const trigger = items.find(
+      (item) =>
+        item.sender?.sender_type === "user" &&
+        (!userId || item.sender.id === userId),
+    );
+    return {
+      messageIds: new Set(
+        items.flatMap((item) => (item.message_id ? [item.message_id] : [])),
+      ),
+      ...(trigger?.message_id ? { triggerMessageId: trigger.message_id } : {}),
+    };
+  }
+
+  async findPlaceholderMessage(
+    chatId: string,
+    marker: string,
+    snapshot: ChatMessageSnapshot,
+    attempts = 10,
+  ): Promise<string> {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const items = await this.recentMessages(chatId, 50);
+      const markerMatch = items.find(
+        (item) =>
+          item.msg_type === "interactive" &&
+          typeof item.body?.content === "string" &&
+          item.body.content.includes(marker),
+      );
+      if (markerMatch?.message_id) return markerMatch.message_id;
+
+      const candidates = items.filter(
+        (item) =>
+          item.msg_type === "interactive" &&
+          typeof item.message_id === "string" &&
+          !snapshot.messageIds.has(item.message_id) &&
+          (item.sender?.sender_type === undefined ||
+            item.sender.sender_type === "app"),
+      );
+      const replyMatch = snapshot.triggerMessageId
+        ? candidates.find((item) => item.parent_id === snapshot.triggerMessageId)
+        : undefined;
+      const match =
+        replyMatch ?? (candidates.length === 1 ? candidates[0] : undefined);
+      if (match?.message_id) return match.message_id;
+      if (attempt + 1 < attempts) await delay(250);
+    }
+    throw new Error("could not resolve the placeholder Feishu message id");
   }
 
   async convertMessageToCard(messageId: string): Promise<string | undefined> {

@@ -41,7 +41,15 @@ test("Feishu client resolves the placeholder message and converts it to CardKit"
     return responses.shift() ?? jsonResponse({ code: 1 }, 500);
   };
   const client = new FeishuClient(config, fetchMock as typeof fetch);
-  assert.equal(await client.findMessageByMarker("oc_chat", "ccfp-marker"), "om_123");
+  assert.equal(
+    await client.findPlaceholderMessage(
+      "oc_chat",
+      "ccfp-marker",
+      { messageIds: new Set() },
+      1,
+    ),
+    "om_123",
+  );
   assert.equal(await client.convertMessageToCard("om_123"), "card_123");
   await client.updateCard("card_123", workingCard("working"), 1);
 
@@ -49,6 +57,58 @@ test("Feishu client resolves the placeholder message and converts it to CardKit"
   assert.match(calls[2]?.url ?? "", /cardkit\/v1\/cards\/id_convert/);
   assert.match(calls[3]?.url ?? "", /cardkit\/v1\/cards\/card_123$/);
   assert.doesNotMatch(JSON.stringify(calls.slice(1)), /secret/);
+});
+
+test("Feishu client resolves a redacted Card 2.0 placeholder from a before-send snapshot", async () => {
+  const responses = [
+    jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
+    jsonResponse({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_trigger",
+            msg_type: "text",
+            sender: { id: "ou_user", sender_type: "user" },
+            body: { content: JSON.stringify({ text: "question" }) },
+          },
+        ],
+      },
+    }),
+    jsonResponse({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_placeholder",
+            msg_type: "interactive",
+            parent_id: "om_trigger",
+            sender: { id: "ou_bot", sender_type: "app" },
+            body: {
+              content: JSON.stringify({
+                title: null,
+                elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]],
+              }),
+            },
+          },
+          {
+            message_id: "om_trigger",
+            msg_type: "text",
+            sender: { id: "ou_user", sender_type: "user" },
+            body: { content: JSON.stringify({ text: "question" }) },
+          },
+        ],
+      },
+    }),
+  ];
+  const fetchMock = async () => responses.shift() ?? jsonResponse({ code: 1 }, 500);
+  const client = new FeishuClient(config, fetchMock as typeof fetch);
+
+  const snapshot = await client.captureMessageSnapshot("oc_chat", "ou_user");
+  assert.equal(
+    await client.findPlaceholderMessage("oc_chat", "ccfp-marker", snapshot, 1),
+    "om_placeholder",
+  );
 });
 
 test("CardKit conversion permission failure falls back without throwing", async () => {
@@ -61,7 +121,7 @@ test("CardKit conversion permission failure falls back without throwing", async 
   assert.equal(await client.convertMessageToCard("om_123"), undefined);
 });
 
-test("chat-history preflight succeeds without sending a message", async () => {
+test("chat-history snapshot succeeds without sending a message", async () => {
   const calls: string[] = [];
   const responses = [
     jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
@@ -72,7 +132,7 @@ test("chat-history preflight succeeds without sending a message", async () => {
     return responses.shift() ?? jsonResponse({ code: 1 }, 500);
   };
   const client = new FeishuClient(config, fetchMock as typeof fetch);
-  assert.equal(await client.checkChatHistoryAccess("oc_chat"), 0);
-  assert.match(calls[1] ?? "", /page_size=1/);
+  assert.equal((await client.captureMessageSnapshot("oc_chat")).messageIds.size, 0);
+  assert.match(calls[1] ?? "", /page_size=50/);
   assert.ok(calls.every((url) => !url.includes("\/messages\/")));
 });

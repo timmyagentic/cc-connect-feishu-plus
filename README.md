@@ -2,7 +2,7 @@
 
 在不修改官方 CC Connect 源码和二进制、也不新建第二条飞书事件连接的前提下，为 CC Connect 增加更完整的飞书单卡片交互。
 
-> 当前版本：`0.1.0` MVP。npm Registry 包名已预留设计但尚未发布；当前发行版可直接通过 npm 从 GitHub 安装。
+> 当前版本：`0.1.1` MVP。npm Registry 包名已预留设计但尚未发布；当前发行版可直接通过 npm 从 GitHub 安装。
 
 ## MVP 做了什么
 
@@ -53,7 +53,7 @@ flowchart LR
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.0 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
   -- cc-connect-feishu-plus install --dry-run
 ```
 
@@ -61,7 +61,7 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.0 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
   -- cc-connect-feishu-plus install
 ```
 
@@ -69,7 +69,7 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.0 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
   -- cc-connect-feishu-plus install --project my-project
 ```
 
@@ -78,7 +78,7 @@ npm exec --yes \
 npm Registry 正式发布后，等价命令会缩短为：
 
 ```bash
-npx --yes cc-connect-feishu-plus@0.1.0 install
+npx --yes cc-connect-feishu-plus@0.1.1 install
 ```
 
 ## 飞书权限
@@ -122,7 +122,7 @@ MCP 工具协议：
 对选中的 Feishu 项目，安装器采用幂等、可回滚的配置变换：
 
 - 追加带版本标记的 `append_system_prompt`，保留用户已有 prompt。
-- 设置项目级 `[projects.display]`：`quiet + legacy`，关闭思考、工具和状态尾巴；卡片正文交给插件维护。
+- 设置项目级 `[projects.display]` 为 `quiet`，关闭思考、工具和状态尾巴；保留用户原有 `card_mode`，让原生 Rich Card 仍可作为后备。
 - 将 `feishu` / `lark` 加入全局流式预览禁用列表，防止官方预览再创建第二张卡。
 - 通过官方 `codex mcp add` / `claude mcp add` 命令注册 `feishu_plus`。
 - 在 `~/.cc-connect/feishu-plus/` 保存权限为 `0600` 的备份、安装清单和短生命周期回合状态。
@@ -133,7 +133,7 @@ MCP 工具协议：
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.0 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
   -- cc-connect-feishu-plus doctor
 ```
 
@@ -143,7 +143,7 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.0 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
   -- cc-connect-feishu-plus uninstall
 ```
 

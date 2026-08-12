@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { TurnService } from "./turn-service.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 function textResult(value: unknown) {
   return {
@@ -22,7 +23,10 @@ function errorResult(error: unknown) {
 }
 
 export function createMcpServer(service = new TurnService()): McpServer {
-  const server = new McpServer({ name: "cc-connect-feishu-plus", version: "0.1.0" });
+  const server = new McpServer({
+    name: "cc-connect-feishu-plus",
+    version: PACKAGE_VERSION,
+  });
 
   server.registerTool(
     "turn_begin",

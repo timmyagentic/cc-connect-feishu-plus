@@ -284,7 +284,6 @@ export function renderConfigForInstall(
       "projects.display",
       {
         mode: tomlString("quiet"),
-        card_mode: tomlString("legacy"),
         thinking_messages: "false",
         tool_messages: "false",
         reply_footer: "false",

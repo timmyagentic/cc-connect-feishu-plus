@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 - 2026-08-13
+
+- Replace the cooperative MCP implementation with an automatic transparent
+  proxy for CC Connect's supported Codex `cmd` option.
+- Start a quoted status card concurrently with the real Codex process, then
+  keep status and final output in one plugin-owned Card 2.0 message.
+- Drop raw reasoning, command, tool argument, and tool output events before
+  they reach CC Connect's renderer. Cards expose only fixed non-expandable
+  activity labels.
+- Return a synthetic `NO_REPLY` completion after the plugin card is finalized,
+  while retaining native output as a fail-safe when card takeover fails.
+- Add a persistent bundled proxy runtime, reversible config wiring, legacy MCP
+  detection, runtime integrity checks, and end-to-end protocol simulation.
+- Preserve configured compact local-file reference rendering in plugin-owned
+  final cards without exposing absolute paths.
+- Support Codex `exec` projects only in this release; incompatible projects are
+  left untouched by default and rejected when explicitly selected.
+
 ## 0.1.2 - 2026-08-12
 
 - Forward CC Connect's per-turn `CC_PROJECT` and `CC_SESSION_KEY` variables to

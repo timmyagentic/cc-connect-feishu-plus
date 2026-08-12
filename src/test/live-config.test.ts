@@ -24,8 +24,14 @@ test(
     t.after(() => rm(directory, { recursive: true, force: true }));
     const originalConfig = await readFile(liveConfig!);
     const originalBinary = await readFile(ccBinary!);
-    const rendered = renderConfigForInstall(originalConfig.toString("utf8"));
     const candidate = join(directory, "config.toml");
+    const runtime = join(directory, "codex-proxy.mjs");
+    await writeFile(runtime, "#!/usr/bin/env node\n", { mode: 0o700 });
+    const rendered = renderConfigForInstall(originalConfig.toString("utf8"), {
+      nodeExecutablePath: process.execPath,
+      runtimeExecutablePath: runtime,
+      configPath: candidate,
+    });
     await writeFile(candidate, rendered.text, { mode: 0o600 });
 
     await execFileAsync(ccBinary!, ["config", "fmt", "--config", candidate], {

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { doctor } from "./doctor.js";
 import { install, uninstall } from "./installer.js";
-import { runMcpServer } from "./mcp.js";
 import { PACKAGE_VERSION } from "./version.js";
 
 function usage(): string {
@@ -11,10 +10,10 @@ Usage:
   cc-connect-feishu-plus install [--dry-run] [--project NAME ...] [--config PATH]
   cc-connect-feishu-plus doctor [--json] [--config PATH]
   cc-connect-feishu-plus uninstall
-  cc-connect-feishu-plus mcp
 
-The installer changes supported configuration only. It never writes the
-official CC Connect source or binary and never starts a Feishu event socket.`;
+The installer adds a transparent Codex process proxy through supported project
+configuration. It does not use MCP, write the official CC Connect source or
+binary, or start a second Feishu event connection.`;
 }
 
 function valueAfter(args: string[], index: number): string {
@@ -31,10 +30,6 @@ async function main(): Promise<void> {
   }
   if (command === "--version" || command === "version") {
     console.log(PACKAGE_VERSION);
-    return;
-  }
-  if (command === "mcp") {
-    await runMcpServer();
     return;
   }
   if (command === "install") {
@@ -61,7 +56,9 @@ async function main(): Promise<void> {
     });
     console.log(JSON.stringify(result, null, 2));
     if (!dryRun) {
-      console.log("\nInstallation complete. Start a new CC Connect agent session to apply the prompt.");
+      console.log(
+        "\nInstallation complete. Restart CC Connect when no Agent turn is active, then start a new session.",
+      );
     }
     return;
   }
@@ -92,7 +89,7 @@ async function main(): Promise<void> {
   if (command === "uninstall") {
     if (args.length) throw new Error("uninstall does not accept options");
     const result = await uninstall();
-    console.log("CC Connect config restored and Feishu Plus MCP registrations removed.");
+    console.log("CC Connect config restored and the automatic proxy runtime removed.");
     for (const warning of result.warnings) console.warn(`Warning: ${warning}`);
     return;
   }

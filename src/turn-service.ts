@@ -11,6 +11,7 @@ import {
 import { sendMarkdownThroughCCConnect } from "./cc-api.js";
 import { loadProjectConfig } from "./config.js";
 import { FeishuClient, type ChatMessageSnapshot } from "./feishu.js";
+import { transformLocalReferences } from "./references.js";
 import { TurnStateStore } from "./state.js";
 import type {
   ActivityPhase,
@@ -71,7 +72,7 @@ function markerFor(turnId: string): string {
 }
 
 function placeholderMarkdown(marker: string): string {
-  return `**⏳ 正在处理…**\n\n[⁣](https://cc-connect-feishu-plus.invalid/turn/${marker})`;
+  return `**⏳ 正在思考…**\n\n🔒 推理与工具详情不会展示，也无法展开。\n\n[⁣](https://cc-connect-feishu-plus.invalid/turn/${marker})`;
 }
 
 export class TurnService {
@@ -140,7 +141,7 @@ export class TurnService {
           active: true,
           turnId: existing.turnId,
           transport: existing.transport,
-          instruction: "Continue this turn and finalize it through turn_complete or turn_fail.",
+          instruction: "The automatic Feishu card for this turn is already active.",
         };
       }
 
@@ -208,8 +209,7 @@ export class TurnService {
           active: true,
           turnId,
           transport: state.transport,
-          instruction:
-            "The quoted Feishu card is active. Hide raw reasoning/tools and finalize through turn_complete or turn_fail, then output exactly NO_REPLY.",
+          instruction: "The automatic quoted Feishu card is active.",
         };
       } catch (error) {
         return {
@@ -272,14 +272,21 @@ export class TurnService {
   }
 
   async complete(markdown: string): Promise<void> {
-    const content = markdown.trim();
-    if (!content) throw new Error("final Markdown answer must not be empty");
-    if ([...content].length > MAX_FINAL_MARKDOWN_CHARS) {
-      throw new Error(`final Markdown answer exceeds ${MAX_FINAL_MARKDOWN_CHARS} characters`);
-    }
+    const rawContent = markdown.trim();
+    if (!rawContent) throw new Error("final Markdown answer must not be empty");
     const context = this.requireContext();
     await this.locked(context.sessionKey, async () => {
-      const { state, client } = await this.requireTurn(context);
+      const { state, client, project } = await this.requireTurn(context);
+      const content = transformLocalReferences(
+        rawContent,
+        project.references,
+        project.agentType,
+        project.feishu.type,
+        process.cwd(),
+      );
+      if ([...content].length > MAX_FINAL_MARKDOWN_CHARS) {
+        throw new Error(`final Markdown answer exceeds ${MAX_FINAL_MARKDOWN_CHARS} characters`);
+      }
       const draft = state.draftMarkdown ?? "";
       if (state.transport === "cardkit" && state.cardId) {
         try {
@@ -330,11 +337,12 @@ export class TurnService {
   private async requireTurn(context: RuntimeContext): Promise<{
     state: TurnState;
     client: FeishuClient;
+    project: ProjectRuntimeConfig;
   }> {
     const state = await this.store.load(context.sessionKey);
-    if (!state) throw new Error("turn_begin must succeed before this tool is used");
+    if (!state) throw new Error("the automatic Feishu card is not active");
     const project = await this.loadProject(context.project);
-    return { state, client: this.createClient(project) };
+    return { state, client: this.createClient(project), project };
   }
 
   private async update(

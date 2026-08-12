@@ -2,6 +2,7 @@ import type { CardDocument } from "./card.js";
 import type { FeishuPlatformConfig } from "./types.js";
 
 type Fetch = typeof globalThis.fetch;
+const REQUEST_TIMEOUT_MS = 5_000;
 
 interface FeishuEnvelope<T> {
   code: number;
@@ -68,6 +69,7 @@ export class FeishuClient {
       this.url("/open-apis/auth/v3/tenant_access_token/internal"),
       {
         method: "POST",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { "content-type": "application/json; charset=utf-8" },
         body: JSON.stringify({
           app_id: this.config.appId,
@@ -96,6 +98,7 @@ export class FeishuClient {
     const token = await this.tenantToken();
     const response = await this.fetchImpl(this.url(path), {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json; charset=utf-8",
@@ -124,6 +127,10 @@ export class FeishuClient {
       { method: "GET" },
     );
     return data.items ?? [];
+  }
+
+  async checkChatHistoryAccess(chatId: string): Promise<number> {
+    return (await this.recentMessages(chatId, 1)).length;
   }
 
   async captureMessageSnapshot(

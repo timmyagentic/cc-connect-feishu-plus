@@ -7,10 +7,22 @@ export interface FeishuPlatformConfig {
   baseUrl: string;
 }
 
+export interface ReferenceDisplayConfig {
+  normalizeAgents: string[];
+  renderPlatforms: string[];
+  displayPath: string;
+  markerStyle: string;
+  enclosureStyle: string;
+}
+
 export interface ProjectRuntimeConfig {
   name: string;
   agentType: AgentType;
+  agentCommand: string;
+  backend: string;
+  workDir?: string;
   appendSystemPrompt?: string;
+  references?: ReferenceDisplayConfig;
   feishu: FeishuPlatformConfig;
 }
 
@@ -39,17 +51,25 @@ export interface TurnState {
   startedAt: string;
 }
 
+export interface InstalledProject {
+  name: string;
+  agentType: "codex";
+  originalAgentCommand: string;
+  proxyAgentCommand: string;
+}
+
 export interface InstallManifest {
-  version: 1;
+  version: 2;
   packageVersion: string;
   installedAt: string;
-  updatedAt?: string;
   configPath: string;
   backupPath: string;
   configBeforeSha256: string;
   configAfterSha256: string;
   ccBinaryPath?: string;
   ccBinarySha256?: string;
-  projects: Array<{ name: string; agentType: AgentType }>;
-  mcpRegistrations: Array<{ agentType: AgentType; name: string }>;
+  nodeExecutablePath: string;
+  runtimeExecutablePath: string;
+  runtimeExecutableSha256: string;
+  projects: InstalledProject[];
 }

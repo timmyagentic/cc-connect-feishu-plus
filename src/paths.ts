@@ -26,3 +26,17 @@ export function stateDir(env: NodeJS.ProcessEnv = process.env): string {
 export function manifestPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(pluginDataDir(env), "install-manifest.json");
 }
+
+export function runtimeDir(
+  version: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return join(pluginDataDir(env), "runtime", `v${version}`);
+}
+
+export function runtimeExecutablePath(
+  version: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return join(runtimeDir(version, env), "codex-proxy.mjs");
+}

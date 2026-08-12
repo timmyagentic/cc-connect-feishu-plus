@@ -24,8 +24,8 @@ export interface CardDocument {
 }
 
 const PHASE_LABELS: Record<ActivityPhase, string> = {
-  analyzing: "正在理解问题…",
-  working: "正在处理…",
+  analyzing: "正在思考…",
+  working: "正在执行操作…",
   verifying: "正在核对结果…",
   preparing_answer: "正在整理回答…",
 };
@@ -77,7 +77,11 @@ export function workingCard(phase: ActivityPhase): CardDocument {
     body: {
       direction: "vertical",
       padding: "12px 12px 12px 12px",
-      elements: [answerElement("正在为你准备回答。")],
+      elements: [
+        answerElement(
+          `${phaseLabel(phase)}\n\n> 🔒 推理与工具详情不会展示，也无法展开。`,
+        ),
+      ],
     },
   };
 }

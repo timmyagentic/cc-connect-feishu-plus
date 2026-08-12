@@ -1,7 +1,7 @@
 {
   "name": "cc-connect-feishu-plus",
-  "version": "0.1.2",
-  "description": "Zero-host-change Feishu rich-card companion plugin for CC Connect",
+  "version": "0.2.0",
+  "description": "Automatic privacy-safe Feishu turn cards for CC Connect",
   "type": "module",
   "bin": {
     "cc-connect-feishu-plus": "dist/cli.js"
@@ -11,13 +11,16 @@
     "dist/*.js.map",
     "dist/*.d.ts",
     "dist/*.d.ts.map",
+    "dist/runtime/*.mjs",
     "README.md",
     "CHANGELOG.md",
     "SECURITY.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node --eval \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.json && npm run build:runtime",
+    "build:runtime": "esbuild src/codex-proxy.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/runtime/codex-proxy.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
     "prepare": "npm run build",
@@ -27,7 +30,7 @@
     "cc-connect",
     "feishu",
     "lark",
-    "mcp",
+    "agent-proxy",
     "rich-card"
   ],
   "author": "timmyagentic",
@@ -44,12 +47,11 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "smol-toml": "1.8.0",
-    "zod": "4.1.12"
+    "smol-toml": "1.8.0"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
+    "esbuild": "0.25.12",
     "typescript": "5.9.3"
   }
 }

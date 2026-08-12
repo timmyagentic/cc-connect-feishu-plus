@@ -2,7 +2,7 @@
 
 在不修改官方 CC Connect 源码和二进制、也不新建第二条飞书事件连接的前提下，为 CC Connect 增加更完整的飞书单卡片交互。
 
-> 当前版本：`0.1.1` MVP。npm Registry 包名已预留设计但尚未发布；当前发行版可直接通过 npm 从 GitHub 安装。
+> 当前版本：`0.1.2` MVP。npm Registry 包名已预留设计但尚未发布；当前发行版可直接通过 npm 从 GitHub 安装。
 
 ## MVP 做了什么
 
@@ -53,7 +53,7 @@ flowchart LR
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.2 \
   -- cc-connect-feishu-plus install --dry-run
 ```
 
@@ -61,7 +61,7 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.2 \
   -- cc-connect-feishu-plus install
 ```
 
@@ -69,7 +69,7 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.2 \
   -- cc-connect-feishu-plus install --project my-project
 ```
 
@@ -78,7 +78,7 @@ npm exec --yes \
 npm Registry 正式发布后，等价命令会缩短为：
 
 ```bash
-npx --yes cc-connect-feishu-plus@0.1.1 install
+npx --yes cc-connect-feishu-plus@0.1.2 install
 ```
 
 ## 飞书权限
@@ -125,6 +125,8 @@ MCP 工具协议：
 - 设置项目级 `[projects.display]` 为 `quiet`，关闭思考、工具和状态尾巴；保留用户原有 `card_mode`，让原生 Rich Card 仍可作为后备。
 - 将 `feishu` / `lark` 加入全局流式预览禁用列表，防止官方预览再创建第二张卡。
 - 通过官方 `codex mcp add` / `claude mcp add` 命令注册 `feishu_plus`。
+- 对 Codex MCP 配置追加官方支持的 `env_vars` 白名单，只透传 CC Connect
+  已经为当前回合设置的 `CC_PROJECT` 与 `CC_SESSION_KEY`；不保存具体会话 ID。
 - 在 `~/.cc-connect/feishu-plus/` 保存权限为 `0600` 的备份、安装清单和短生命周期回合状态。
 
 插件不会持久化 `app_secret` 或 tenant token；token 只保存在 MCP 进程内存中。回合状态文件不包含思考或工具调用，只包含卡片定位信息和已经面向用户展示的正文草稿。
@@ -133,17 +135,17 @@ MCP 工具协议：
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.2 \
   -- cc-connect-feishu-plus doctor
 ```
 
-`doctor` 会检查配置、原生 Unix socket、安装清单和官方二进制哈希，并明确报告单连接边界。
+`doctor` 会检查配置、原生 Unix socket、安装清单、Codex MCP 动态上下文白名单和官方二进制哈希，并明确报告单连接边界。
 
 卸载：
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.1.2 \
   -- cc-connect-feishu-plus uninstall
 ```
 

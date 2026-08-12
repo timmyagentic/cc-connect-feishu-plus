@@ -8,6 +8,10 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
+import {
+  codexMcpContextEnvIsConfigured,
+  configureCodexMcpContextEnv,
+} from "./codex-mcp.js";
 import { renderConfigForInstall } from "./config.js";
 import {
   discoverHostBinary,
@@ -39,12 +43,20 @@ function timestamp(): string {
   return new Date().toISOString().replaceAll(":", "-");
 }
 
-function registrationArgs(agentType: AgentType, configPath: string): string[] {
+function runtimePackageSpec(packageVersion: string): string {
+  return `github:timmyagentic/cc-connect-feishu-plus#v${packageVersion}`;
+}
+
+function registrationArgs(
+  agentType: AgentType,
+  configPath: string,
+  packageSpec = RUNTIME_PACKAGE_SPEC,
+): string[] {
   const runtime = [
     "npm",
     "exec",
     "--yes",
-    `--package=${RUNTIME_PACKAGE_SPEC}`,
+    `--package=${packageSpec}`,
     "--",
     "cc-connect-feishu-plus",
     "mcp",
@@ -80,6 +92,8 @@ export interface InstallOptions {
   dryRun?: boolean;
   env?: NodeJS.ProcessEnv;
   commandRunner?: CommandRunner;
+  configureCodexContextEnv?: typeof configureCodexMcpContextEnv;
+  codexContextEnvIsConfigured?: typeof codexMcpContextEnvIsConfigured;
 }
 
 export interface InstallResult {
@@ -117,6 +131,10 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
   const env = options.env ?? process.env;
   const path = options.configPath ?? defaultConfigPath(env);
   const runner = options.commandRunner ?? runCommand;
+  const configureCodexContextEnv =
+    options.configureCodexContextEnv ?? configureCodexMcpContextEnv;
+  const contextEnvIsConfigured =
+    options.codexContextEnvIsConfigured ?? codexMcpContextEnvIsConfigured;
   const original = await readFile(path);
   const originalText = original.toString("utf8");
   const rendered = renderConfigForInstall(
@@ -144,25 +162,112 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
   if (existing) {
     const currentHash = sha256(original);
     if (
-      existing.configPath === path &&
-      currentHash === existing.configAfterSha256 &&
-      rendered.text === originalText
+      existing.configPath !== path ||
+      currentHash !== existing.configAfterSha256 ||
+      rendered.text !== originalText
     ) {
+      throw new Error(
+        "an install manifest already exists but the managed config changed; run doctor before reinstalling",
+      );
+    }
+
+    const registeredAgents = existing.mcpRegistrations.map(
+      (registration) => registration.agentType,
+    );
+    const needsContextRepair =
+      registeredAgents.includes("codex") && !(await contextEnvIsConfigured(env));
+    const needsRuntimeUpgrade = existing.packageVersion !== PACKAGE_VERSION;
+    if (options.dryRun) {
       return {
-        changed: false,
-        dryRun: Boolean(options.dryRun),
+        changed: needsContextRepair || needsRuntimeUpgrade,
+        dryRun: true,
         configPath: path,
-        projects: rendered.projects,
-        agents,
+        projects: existing.projects,
+        agents: registeredAgents,
         ...(hostBefore
           ? { hostBinary: { ...hostBefore, unchanged: hostBefore.sha256 === existing.ccBinarySha256 } }
           : {}),
         backupPath: existing.backupPath,
       };
     }
-    throw new Error(
-      "an install manifest already exists but the managed config changed; run doctor before reinstalling",
-    );
+
+    if (needsRuntimeUpgrade) {
+      const previousSpec = runtimePackageSpec(existing.packageVersion);
+      const touched: AgentType[] = [];
+      try {
+        for (const registration of existing.mcpRegistrations) {
+          const agent = registration.agentType;
+          const removed = await runner(agentCommand(agent), removalArgs(agent));
+          if (removed.code !== 0) {
+            throw new Error(`failed to remove the previous ${MCP_NAME} ${agent} registration`);
+          }
+          touched.push(agent);
+          const added = await runner(
+            agentCommand(agent),
+            registrationArgs(agent, path),
+          );
+          if (added.code !== 0) {
+            throw new Error(`failed to upgrade ${MCP_NAME} in ${agent}`);
+          }
+          if (agent === "codex") await configureCodexContextEnv(env);
+        }
+        const hostAfterRegistration = await discoverHostBinary(env);
+        if (
+          !hostAfterRegistration ||
+          hostAfterRegistration.path !== hostBefore.path ||
+          hostAfterRegistration.sha256 !== hostBefore.sha256
+        ) {
+          throw new Error("official CC Connect binary changed during installation upgrade");
+        }
+        await atomicWrite(
+          manifestPath(env),
+          `${JSON.stringify(
+            {
+              ...existing,
+              packageVersion: PACKAGE_VERSION,
+              updatedAt: new Date().toISOString(),
+            },
+            null,
+            2,
+          )}\n`,
+          0o600,
+        );
+      } catch (error) {
+        for (const agent of touched.reverse()) {
+          await runner(agentCommand(agent), removalArgs(agent)).catch(() => undefined);
+          await runner(
+            agentCommand(agent),
+            registrationArgs(agent, path, previousSpec),
+          ).catch(() => undefined);
+          if (agent === "codex") {
+            await configureCodexContextEnv(env).catch(() => undefined);
+          }
+        }
+        throw error;
+      }
+    } else if (needsContextRepair) {
+      await configureCodexContextEnv(env);
+    }
+
+    const hostAfter = await discoverHostBinary(env);
+    return {
+      changed: needsContextRepair || needsRuntimeUpgrade,
+      dryRun: false,
+      configPath: path,
+      projects: existing.projects,
+      agents: registeredAgents,
+      ...(hostAfter
+        ? {
+            hostBinary: {
+              ...hostAfter,
+              unchanged:
+                !existing.ccBinarySha256 ||
+                hostAfter.sha256 === existing.ccBinarySha256,
+            },
+          }
+        : {}),
+      backupPath: existing.backupPath,
+    };
   }
 
   if (options.dryRun) {
@@ -193,6 +298,7 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
         throw new Error(`failed to register ${MCP_NAME} in ${agent}`);
       }
       registered.push(agent);
+      if (agent === "codex") await configureCodexContextEnv(env);
     }
 
     await atomicWrite(path, rendered.text, originalMode);

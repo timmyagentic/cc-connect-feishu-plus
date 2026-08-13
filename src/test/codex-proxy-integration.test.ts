@@ -57,22 +57,19 @@ test("bundled proxy owns one privacy-safe card without MCP cooperation", async (
   const runDirectory = join(data, "run");
   await mkdir(runDirectory, { recursive: true });
   const socket = join(runDirectory, "api.sock");
-  let placeholderSent = false;
   let sendCalls = 0;
 
   const ccServer = createServer(async (request, response) => {
-    assert.equal(request.url, "/send");
-    const body = await collectRequestBody(request);
-    assert.match(body, /正在思考/);
-    assert.doesNotMatch(body, /PRIVATE_/);
     sendCalls += 1;
-    placeholderSent = true;
+    await collectRequestBody(request);
     json(response, { status: "ok" });
   });
   await listenUnix(ccServer, socket);
   t.after(() => close(ccServer));
 
   const cardBodies: string[] = [];
+  const timeline: string[] = [];
+  const replyBodies: string[] = [];
   const feishuServer = createServer(async (request, response) => {
     const url = request.url ?? "";
     if (url === "/open-apis/auth/v3/tenant_access_token/internal") {
@@ -80,29 +77,32 @@ test("bundled proxy owns one privacy-safe card without MCP cooperation", async (
       json(response, { code: 0, tenant_access_token: "token", expire: 7200 });
       return;
     }
-    if (url.startsWith("/open-apis/im/v1/messages?")) {
+    if (request.method === "GET" && url.startsWith("/open-apis/im/v1/messages?")) {
       const trigger = {
         message_id: "om_trigger",
         msg_type: "text",
         sender: { id: "ou_user", sender_type: "user" },
         body: { content: "question" },
       };
-      const placeholder = {
-        message_id: "om_placeholder",
-        msg_type: "interactive",
-        parent_id: "om_trigger",
-        sender: { id: "ou_bot", sender_type: "app" },
-        body: { content: "redacted card" },
-      };
       json(response, {
         code: 0,
-        data: { items: placeholderSent ? [placeholder, trigger] : [trigger] },
+        data: { items: [trigger] },
       });
       return;
     }
-    if (url === "/open-apis/cardkit/v1/cards/id_convert") {
-      await collectRequestBody(request);
+    if (request.method === "POST" && url === "/open-apis/cardkit/v1/cards") {
+      timeline.push("create-card");
+      cardBodies.push(await collectRequestBody(request));
       json(response, { code: 0, data: { card_id: "card_123" } });
+      return;
+    }
+    if (
+      request.method === "POST" &&
+      url === "/open-apis/im/v1/messages/om_trigger/reply"
+    ) {
+      timeline.push("reply-card");
+      replyBodies.push(await collectRequestBody(request));
+      json(response, { code: 0, data: { message_id: "om_card" } });
       return;
     }
     if (url.startsWith("/open-apis/cardkit/v1/cards/card_123")) {
@@ -154,6 +154,7 @@ for (let index = 1; index <= 10; index += 1) {
 }
 events.push(
   { type: "item.completed", item: { type: "agent_message", text: "这是最终答案。" } },
+  { type: "item.completed", item: { id: "todo_1", type: "todo_list", items: [{ text: "PRIVATE_TODO_SENTINEL", completed: true }] } },
   { type: "turn.completed", usage: { input_tokens: 12, output_tokens: 3 } },
 );
 for (const event of events) console.log(JSON.stringify(event));
@@ -201,7 +202,18 @@ for (const event of events) console.log(JSON.stringify(event));
   );
 
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(sendCalls, 1);
+  assert.equal(sendCalls, 0);
+  assert.deepEqual(timeline, ["create-card", "reply-card"]);
+  assert.equal(replyBodies.length, 1);
+  const replyBody = replyBodies[0] ?? "";
+  const reply = JSON.parse(replyBody) as { msg_type: string; content: string };
+  const replyContent = JSON.parse(reply.content) as {
+    type: string;
+    data: { card_id: string };
+  };
+  assert.equal(reply.msg_type, "interactive");
+  assert.deepEqual(replyContent, { type: "card", data: { card_id: "card_123" } });
+  assert.doesNotMatch(replyBody, /正在思考|PRIVATE_/);
   assert.match(result.stdout, /thread\.started/);
   assert.match(result.stdout, /NO_REPLY/);
   assert.doesNotMatch(result.stdout, /PRIVATE_|这是最终答案/);

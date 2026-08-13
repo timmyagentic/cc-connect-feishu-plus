@@ -14,11 +14,16 @@ interface MessageItem {
   message_id?: string;
   msg_type?: string;
   parent_id?: string;
+  root_id?: string;
   sender?: {
     id?: string;
     sender_type?: string;
   };
   body?: { content?: string };
+}
+
+interface MessageResponseData {
+  message_id?: string;
 }
 
 export interface ChatMessageSnapshot {
@@ -136,11 +141,15 @@ export class FeishuClient {
   async captureMessageSnapshot(
     chatId: string,
     userId?: string,
+    rootMessageId?: string,
   ): Promise<ChatMessageSnapshot> {
     const items = await this.recentMessages(chatId, 50);
     const trigger = items.find(
       (item) =>
         item.sender?.sender_type === "user" &&
+        (!rootMessageId ||
+          item.message_id === rootMessageId ||
+          item.root_id === rootMessageId) &&
         (!userId || item.sender.id === userId),
     );
     return {
@@ -186,17 +195,57 @@ export class FeishuClient {
     throw new Error("could not resolve the placeholder Feishu message id");
   }
 
-  async convertMessageToCard(messageId: string): Promise<string | undefined> {
-    try {
-      const data = await this.request<{ card_id?: string }>(
-        "/open-apis/cardkit/v1/cards/id_convert",
-        { method: "POST", body: JSON.stringify({ message_id: messageId }) },
-      );
-      return data.card_id;
-    } catch (error) {
-      if (error instanceof FeishuApiError) return undefined;
-      throw error;
+  async createCardEntity(card: CardDocument): Promise<string> {
+    const data = await this.request<{ card_id?: string }>(
+      "/open-apis/cardkit/v1/cards",
+      {
+        method: "POST",
+        body: JSON.stringify({ type: "card_json", data: JSON.stringify(card) }),
+      },
+    );
+    if (!data.card_id) {
+      throw new FeishuApiError("Feishu create card entity returned no card_id");
     }
+    return data.card_id;
+  }
+
+  async sendCardEntity(
+    chatId: string,
+    cardId: string,
+    triggerMessageId?: string,
+    replyInThread = false,
+  ): Promise<string> {
+    const content = JSON.stringify({
+      type: "card",
+      data: { card_id: cardId },
+    });
+    const data = triggerMessageId
+      ? await this.request<MessageResponseData>(
+          `/open-apis/im/v1/messages/${encodeURIComponent(triggerMessageId)}/reply`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              msg_type: "interactive",
+              content,
+              ...(replyInThread ? { reply_in_thread: true } : {}),
+            }),
+          },
+        )
+      : await this.request<MessageResponseData>(
+          "/open-apis/im/v1/messages?receive_id_type=chat_id",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              receive_id: chatId,
+              msg_type: "interactive",
+              content,
+            }),
+          },
+        );
+    if (!data.message_id) {
+      throw new FeishuApiError("Feishu send card entity returned no message_id");
+    }
+    return data.message_id;
   }
 
   async patchMessage(messageId: string, card: CardDocument): Promise<void> {

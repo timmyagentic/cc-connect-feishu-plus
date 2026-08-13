@@ -78,6 +78,10 @@ function isMessageItem(type: unknown): boolean {
   return type === "agent_message" || type === "message";
 }
 
+function isHousekeepingItem(type: unknown): boolean {
+  return type === "todo_list" || type === "plan" || type === "turn_plan";
+}
+
 function itemKey(item: Record<string, unknown>): string | undefined {
   if (typeof item.id !== "string" || item.id === "") return undefined;
   return createHash("sha256").update(item.id).digest("base64url");
@@ -154,7 +158,6 @@ export class CodexProxyFilter {
     phase: ActivityPhase,
     source: ActivitySignal["source"],
   ): FilterResult {
-    this.clearPendingFinal();
     return {
       forward: [],
       signal: {
@@ -170,7 +173,6 @@ export class CodexProxyFilter {
   }
 
   private reasoningCompleted(item: Record<string, unknown>): FilterResult {
-    this.clearPendingFinal();
     const key = itemKey(item);
     if (key && this.seenReasoningKeys.has(key)) return { forward: [] };
     if (key) this.seenReasoningKeys.add(key);
@@ -179,7 +181,6 @@ export class CodexProxyFilter {
   }
 
   private toolStarted(item: Record<string, unknown>): FilterResult {
-    this.clearPendingFinal();
     const key = itemKey(item);
     if (key) {
       if (this.seenToolKeys.has(key)) return { forward: [] };
@@ -193,7 +194,6 @@ export class CodexProxyFilter {
   }
 
   private toolCompleted(item: Record<string, unknown>): FilterResult {
-    this.clearPendingFinal();
     const key = itemKey(item);
     if (key) {
       if (this.identifiedToolsInFlight.delete(key)) return { forward: [] };
@@ -227,12 +227,18 @@ export class CodexProxyFilter {
     }
 
     const eventType = event.type;
+    if (eventType === "item.updated") {
+      // Current Codex uses updates for plan/tool state. CC Connect does not
+      // need these payloads, and suppressing them preserves the privacy wall.
+      return { forward: [] };
+    }
+
     if (eventType === "item.started") {
       const item = record(event.item);
       if (!item) return { forward: [] };
       const itemType = item?.type;
+      if (isHousekeepingItem(itemType)) return { forward: [] };
       if (itemType === "reasoning") {
-        this.clearPendingFinal();
         return { forward: [] };
       }
       if (isMessageItem(itemType) || itemType === "error") {
@@ -245,11 +251,15 @@ export class CodexProxyFilter {
       const item = record(event.item);
       const itemType = item?.type;
       if (!item) return { forward: [] };
+      if (isHousekeepingItem(itemType)) return { forward: [] };
       if (isMessageItem(itemType)) {
         const text = itemText(item);
         if (text !== "") {
-          this.pendingFinalText.push(text);
-          this.pendingFinalLines.push(line);
+          // Codex defines the last assistant item in the completed turn as the
+          // final message. Replacing here keeps commentary out while allowing
+          // terminal housekeeping after the answer without losing it.
+          this.pendingFinalText = [text];
+          this.pendingFinalLines = [line];
         }
         return { forward: [] };
       }
@@ -257,7 +267,6 @@ export class CodexProxyFilter {
         return this.reasoningCompleted(item);
       }
       if (itemType === "error") {
-        this.clearPendingFinal();
         return { forward: [] };
       }
       return this.toolCompleted(item);

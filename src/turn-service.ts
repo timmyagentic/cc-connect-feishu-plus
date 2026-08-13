@@ -32,6 +32,8 @@ export interface RuntimeContext {
   sessionKey: string;
   chatId: string;
   userId?: string;
+  rootMessageId?: string;
+  replyInThread: boolean;
 }
 
 export interface BeginResult {
@@ -64,7 +66,9 @@ export function runtimeContext(
     project,
     sessionKey,
     chatId: parts[1],
-    ...(parts[2] ? { userId: parts[2] } : {}),
+    ...(parts[2] && parts[2] !== "root" ? { userId: parts[2] } : {}),
+    ...(parts[2] === "root" && parts[3] ? { rootMessageId: parts[3] } : {}),
+    replyInThread: parts[2] === "root" && Boolean(parts[3]),
   };
 }
 
@@ -160,7 +164,11 @@ export class TurnService {
       const client = this.createClient(project);
       let snapshot: ChatMessageSnapshot;
       try {
-        snapshot = await client.captureMessageSnapshot(context.chatId, context.userId);
+        snapshot = await client.captureMessageSnapshot(
+          context.chatId,
+          context.userId,
+          context.rootMessageId,
+        );
       } catch (error) {
         return {
           active: false,
@@ -178,20 +186,24 @@ export class TurnService {
 
       const turnId = randomUUID();
       const marker = markerFor(turnId);
-      await this.sendMarkdown({
-        project: context.project,
-        sessionKey: context.sessionKey,
-        markdown: placeholderMarkdown(marker),
-      });
+      const initialCard = workingCard("analyzing");
+      let state: TurnState | undefined;
 
       try {
-        const messageId = await client.findPlaceholderMessage(
+        const triggerMessageId = project.feishu.replyToTrigger
+          ? snapshot.triggerMessageId
+          : undefined;
+        if (project.feishu.replyToTrigger && !triggerMessageId) {
+          throw new Error("could not identify the triggering Feishu message");
+        }
+        const cardId = await client.createCardEntity(initialCard);
+        const messageId = await client.sendCardEntity(
           context.chatId,
-          marker,
-          snapshot,
+          cardId,
+          triggerMessageId,
+          context.replyInThread,
         );
-        const cardId = await client.convertMessageToCard(messageId);
-        const state: TurnState = {
+        state = {
           version: 1,
           turnId,
           project: context.project,
@@ -199,35 +211,53 @@ export class TurnService {
           chatId: context.chatId,
           marker,
           messageId,
-          ...(cardId ? { cardId } : {}),
-          transport: cardId ? "cardkit" : "message_patch",
+          cardId,
+          transport: "cardkit",
           sequence: 0,
           phase: "analyzing",
           startedAt: new Date().toISOString(),
         };
-
+      } catch {
         try {
-          await this.update(client, state, workingCard("analyzing"));
+          await this.sendMarkdown({
+            project: context.project,
+            sessionKey: context.sessionKey,
+            markdown: placeholderMarkdown(marker),
+          });
+          const messageId = await client.findPlaceholderMessage(
+            context.chatId,
+            marker,
+            snapshot,
+          );
+          state = {
+            version: 1,
+            turnId,
+            project: context.project,
+            sessionKey: context.sessionKey,
+            chatId: context.chatId,
+            marker,
+            messageId,
+            transport: "message_patch",
+            sequence: 0,
+            phase: "analyzing",
+            startedAt: new Date().toISOString(),
+          };
+          await client.patchMessage(messageId, initialCard);
         } catch (error) {
-          if (!cardId) throw error;
-          delete state.cardId;
-          state.transport = "message_patch";
-          state.sequence = 0;
-          await this.update(client, state, workingCard("analyzing"));
+          return {
+            active: false,
+            instruction: `Feishu Plus could not establish the turn card (${safeError(error)}). Reply normally through native CC Connect.`,
+          };
         }
-        await this.store.save(state);
-        return {
-          active: true,
-          turnId,
-          transport: state.transport,
-          instruction: "The automatic quoted Feishu card is active.",
-        };
-      } catch (error) {
-        return {
-          active: false,
-          instruction: `Feishu Plus could not take over the placeholder (${safeError(error)}). Reply normally through native CC Connect.`,
-        };
       }
+
+      await this.store.save(state);
+      return {
+        active: true,
+        turnId,
+        transport: state.transport,
+        instruction: "The automatic Feishu card for this turn is active.",
+      };
     });
   }
 

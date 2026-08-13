@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { install, uninstall } from "../installer.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 const CONFIG = `[[projects]]
 name = "demo"
@@ -71,7 +72,7 @@ test("dry-run describes proxy wiring without writing anything", async (t) => {
   assert.equal(result.changed, true);
   assert.equal(result.hostBinary?.unchanged, true);
   assert.equal(await readFile(item.configPath, "utf8"), CONFIG);
-  assert.match(result.runtimeExecutablePath, /feishu-plus\/runtime\/v0\.2\.1/);
+  assert.match(result.runtimeExecutablePath, /feishu-plus\/runtime\/v0\.2\.2/);
   await assert.rejects(stat(join(item.data, "feishu-plus")), /ENOENT/);
 });
 
@@ -155,6 +156,72 @@ test("reinstall repairs a missing proxy runtime without touching the backup", as
   assert.equal(repaired.changed, true);
   assert.equal(repaired.backupPath, initial.backupPath);
   assert.equal((await stat(repaired.runtimeExecutablePath)).mode & 0o777, 0o700);
+});
+
+test("patch upgrade preserves the original backup and rewires the runtime atomically", async (t) => {
+  const item = await fixture("ccfp-upgrade-");
+  t.after(() => rm(item.directory, { recursive: true, force: true }));
+  const initial = await install({
+    configPath: item.configPath,
+    env: item.env,
+    runtimeSourcePath: item.runtimeSourcePath,
+  });
+  const manifestPath = join(item.data, "feishu-plus", "install-manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+    packageVersion: string;
+    configAfterSha256: string;
+    runtimeExecutablePath: string;
+    runtimeExecutableSha256: string;
+  };
+  const oldRuntimePath = initial.runtimeExecutablePath.replace(
+    `v${PACKAGE_VERSION}`,
+    "v0.2.1",
+  );
+  await mkdir(dirname(oldRuntimePath), { recursive: true });
+  const oldRuntime = "#!/usr/bin/env node\n// old proxy\n";
+  await writeFile(oldRuntimePath, oldRuntime, { mode: 0o700 });
+  const oldConfig = (await readFile(item.configPath, "utf8")).replaceAll(
+    initial.runtimeExecutablePath,
+    oldRuntimePath,
+  );
+  await writeFile(item.configPath, oldConfig, { mode: 0o600 });
+  await rm(dirname(initial.runtimeExecutablePath), {
+    recursive: true,
+    force: true,
+  });
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        ...manifest,
+        packageVersion: "0.2.1",
+        configAfterSha256: digest(oldConfig),
+        runtimeExecutablePath: oldRuntimePath,
+        runtimeExecutableSha256: digest(oldRuntime),
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+
+  const upgraded = await install({
+    configPath: item.configPath,
+    env: item.env,
+    runtimeSourcePath: item.runtimeSourcePath,
+  });
+  const upgradedManifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+    packageVersion: string;
+    backupPath: string;
+  };
+  assert.equal(upgraded.changed, true);
+  assert.equal(upgraded.backupPath, initial.backupPath);
+  assert.equal(upgradedManifest.packageVersion, PACKAGE_VERSION);
+  assert.match(await readFile(item.configPath, "utf8"), /runtime\/v0\.2\.2/);
+  await assert.rejects(stat(oldRuntimePath), /ENOENT/);
+
+  await uninstall({ env: item.env });
+  assert.equal(await readFile(item.configPath, "utf8"), CONFIG);
 });
 
 test("legacy MCP registration fails closed", async (t) => {

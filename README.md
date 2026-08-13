@@ -2,13 +2,14 @@
 
 一个独立安装的 npm companion plugin，为 CC Connect 的 Codex 飞书入口提供自动、隐私安全的单卡片体验。
 
-它不是 CC Connect 的 fork，也不使用 MCP。CC Connect 继续负责飞书入站、权限规则、会话路由和引用回复；插件通过 CC Connect 已支持的 Agent `cmd` 配置运行一个透明 Codex 进程代理，并用自己的 Card 2.0 卡片接管本回合的展示。
+它不是 CC Connect 的 fork，也不使用 MCP。CC Connect 继续负责飞书入站、权限规则和会话路由；插件通过 CC Connect 已支持的 Agent `cmd` 配置运行一个透明 Codex 进程代理，并用自己的 Card 2.0 卡片接管本回合的展示，同时遵循原项目的引用回复与话题隔离配置。
 
-> 当前版本：`0.2.1`。支持 CC Connect `1.4.1+` 的 Codex `exec` 后端。
+> 当前版本：`0.2.2`。支持 CC Connect `1.4.1+` 的 Codex `exec` 后端。
 
 ## 交互效果
 
-- 收到消息后立即建立一张引用原始提问的状态卡片，不再长时间无反馈。
+- 收到消息后立即建立一张已经包含状态正文的卡片；不会先发送空 CardKit 实体，因此不会出现一段全白的首屏。
+- `reply_to_trigger = true` 时引用原始提问；关闭时普通发送。开启 `thread_isolation` 的会话继续在对应话题内回复。
 - 推理阶段显示 `正在思考…`，执行工具时显示 `正在调用工具…`。
 - 状态卡只用匿名计数反馈活动，例如 `推理 2 次 · 工具 7 次`；连续调用工具时计数会持续推进。
 - 推理内容、Bash、工具名称、参数和输出不会进入卡片，也不存在可以展开的控件。
@@ -28,9 +29,8 @@ flowchart LR
     U["飞书用户消息"] --> N["CC Connect 原生飞书连接"]
     N --> P["Feishu Plus Codex 透明代理"]
     P --> C["真实 Codex CLI"]
-    P -->|"固定安全状态与最终正文"| F["同一张 Card 2.0 卡片"]
-    P -->|"仅 NO_REPLY"| N
-    N -->|"原生引用关系"| F
+    P -->|"先创建有正文的卡片实体，再引用回复"| F["同一张 Card 2.0 卡片"]
+    P -->|"最终仅返回 NO_REPLY"| N
 ```
 
 插件不会：
@@ -44,12 +44,12 @@ flowchart LR
 自动代理的处理顺序：
 
 1. CC Connect 收到飞书消息，并像原来一样启动所选项目的 Codex Agent。
-2. 安装后的 `cmd` 首先启动真实 Codex，不等待飞书 API；同时通过 CC Connect 本地 `/send` 建立引用占位消息。
-3. 插件定位这条占位消息，并用自己的 Card 2.0 JSON 持续更新同一张卡片。
+2. 安装后的 `cmd` 立即启动真实 Codex，同时读取最近消息，确定本回合的触发消息与话题根消息。
+3. 插件先以完整的“正在思考”Card 2.0 JSON 创建 CardKit 实体，再按 `reply_to_trigger` 选择引用回复或普通发送。卡片第一次出现在聊天中时已经有正文。
 4. 代理观察 Codex JSONL。reasoning 和 tool 事件只更新匿名计数与固定状态，原始内容立即丢弃。
-5. 最终 `agent_message` 写入插件卡片并标记 `Done`。
+5. 以回合内最后一条 `agent_message` 作为最终答案；其后的 tool 完成、todo/plan 等收尾事件不能清空它。最终正文写入同一张卡片并标记 `Done`。
 6. 代理只向 CC Connect 返回 `NO_REPLY`，避免再产生一条原生答案。
-7. 如果占位消息或卡片更新失败，代理恢复原始最终事件，让 CC Connect 正常兜底。
+7. CardKit 建立失败时，插件通过 CC Connect 原生 `/send` 发送已有正文的兼容卡片，并在同一消息上渐进 PATCH；两条路径都不再使用已废弃的 `id_convert`。如果接管彻底失败，代理恢复原始最终事件，让 CC Connect 正常兜底。
 
 ## 安装
 
@@ -64,7 +64,7 @@ flowchart LR
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
   -- cc-connect-feishu-plus install --dry-run
 ```
 
@@ -72,7 +72,7 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
   -- cc-connect-feishu-plus install
 ```
 
@@ -80,7 +80,7 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
   -- cc-connect-feishu-plus install --project "Codex"
 ```
 
@@ -89,18 +89,20 @@ npm exec --yes \
 正式发布到 npm Registry 后，等价命令为：
 
 ```bash
-npx --yes cc-connect-feishu-plus@0.2.1 install
+npx --yes cc-connect-feishu-plus@0.2.2 install
 ```
 
 ### 从 0.1.x 迁移
 
-`0.1.x` 是已废弃的 MCP 协作式实现。`0.2.1` 会检测旧 manifest 和 `feishu_plus` MCP 注册并拒绝覆盖；请先使用对应旧版本执行 `uninstall`，确认旧 MCP 配置已经移除，再安装 `0.2.1`。
+`0.1.x` 是已废弃的 MCP 协作式实现。`0.2.2` 会检测旧 manifest 和 `feishu_plus` MCP 注册并拒绝覆盖；请先使用对应旧版本执行 `uninstall`，确认旧 MCP 配置已经移除，再安装 `0.2.2`。
+
+已安装 `0.2.0` 或 `0.2.1` 时可直接执行 `0.2.2 install` 原位升级。安装器会保留最初的配置备份和卸载能力，原子切换配置与运行时，成功后清理旧版本运行时目录。
 
 ## 安装器修改什么
 
 安装器只修改用户配置和插件自己的数据目录：
 
-- 将打包后的透明代理复制到 `~/.cc-connect/feishu-plus/runtime/v0.2.1/`；
+- 将打包后的透明代理复制到 `~/.cc-connect/feishu-plus/runtime/v0.2.2/`；
 - 把选中项目的 `[projects.agent.options].cmd` 指向安装时的 Node 绝对路径和代理，并在参数中保存原始 Codex 命令，避免后台服务依赖 shell PATH；
 - 为选中项目关闭原生 thinking/tool/context/footer 展示，作为隐私兜底；
 - 保留项目现有的 `mode`、`card_mode`、`reply_to_trigger`、Agent 参数和其他平台配置；
@@ -111,16 +113,18 @@ npx --yes cc-connect-feishu-plus@0.2.1 install
 
 ## 飞书权限
 
-插件在发送占位卡片前会先读取会话历史。缺少该权限时不会留下卡住的占位卡片，而是直接使用 CC Connect 原生回复。
+插件在发送卡片前会先读取会话历史，以确定真实触发消息；话题会话还会按 `root_id` 限定范围，避免高流量群聊中引用错人。缺少该权限时不会留下卡住的卡片，而是直接使用 CC Connect 原生回复。
 
 应用需要具备以下 API 对应的权限：
 
 - [获取会话历史消息](https://open.feishu.cn/document/server-docs/im-v1/message/list)
+- [回复消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/reply)
+- [发送消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/create)
 - [更新应用发送的消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/patch)
 
 以下 CardKit 能力用于更丝滑的文本动画；不可用时会自动降级为整卡 PATCH：
 
-- [消息 ID 转卡片 ID](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/cardkit-v1/card/id_convert)
+- [创建卡片实体](https://open.feishu.cn/document/cardkit-v1/card/create)
 - [全量更新卡片](https://open.feishu.cn/document/cardkit-v1/card/update)
 - [流式更新卡片文本](https://open.feishu.cn/document/cardkit-v1/streaming-updates-openapi-overview)
 
@@ -130,7 +134,7 @@ npx --yes cc-connect-feishu-plus@0.2.1 install
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
   -- cc-connect-feishu-plus doctor
 ```
 
@@ -138,16 +142,16 @@ npm exec --yes \
 
 ```bash
 npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.1 \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
   -- cc-connect-feishu-plus uninstall
 ```
 
 ## 当前限制
 
-- `0.2.1` 只支持 Codex `exec`；CC Connect 的 Codex `app_server` 和其他 Agent 保持原生行为。
+- `0.2.2` 只支持 Codex `exec`；CC Connect 的 Codex `app_server` 和其他 Agent 保持原生行为。
 - 单卡片最终正文上限为 24,000 个 Unicode 字符。
-- 插件依赖飞书历史消息 API 定位刚刚由原生适配器发出的引用占位消息。
-- CardKit 的 `id_convert` 接口已被飞书标记为废弃，因此同消息 PATCH 是长期保留的兼容路径。
+- 插件依赖飞书历史消息 API 定位触发消息；若 CardKit 不可用，兼容路径还会用它定位刚刚由原生适配器发出的状态卡片。
+- Codex `exec --json` 没有逐 token 的最终正文事件，因此真正的正文动画仍在最终 `agent_message` 到达后开始。
 
 ## 开发与验证
 

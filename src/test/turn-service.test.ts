@@ -13,16 +13,30 @@ class FakeClient {
   readonly cardUpdates: Array<{ cardId: string; card: CardDocument; sequence: number }> = [];
   readonly patches: Array<{ messageId: string; card: CardDocument }> = [];
   readonly textUpdates: Array<{ cardId: string; content: string; sequence: number }> = [];
+  readonly initializations: Array<
+    | { kind: "create"; card: CardDocument }
+    | {
+        kind: "send";
+        chatId: string;
+        cardId: string;
+        triggerMessageId?: string;
+        replyInThread: boolean;
+      }
+  > = [];
+  conversions = 0;
 
-  constructor(private readonly cardId: string | undefined) {}
+  constructor(
+    private readonly cardId: string | undefined,
+    private readonly triggerMessageId: string | null = "om_trigger",
+  ) {}
 
   async captureMessageSnapshot(): Promise<{
     messageIds: ReadonlySet<string>;
-    triggerMessageId: string;
+    triggerMessageId?: string;
   }> {
     return {
-      messageIds: new Set(["om_trigger"]),
-      triggerMessageId: "om_trigger",
+      messageIds: new Set(this.triggerMessageId ? [this.triggerMessageId] : []),
+      ...(this.triggerMessageId ? { triggerMessageId: this.triggerMessageId } : {}),
     };
   }
 
@@ -32,11 +46,34 @@ class FakeClient {
     snapshot: { messageIds: ReadonlySet<string>; triggerMessageId?: string },
   ): Promise<string> {
     assert.match(marker, /^ccfp-/);
-    assert.equal(snapshot.triggerMessageId, "om_trigger");
+    assert.equal(snapshot.triggerMessageId, this.triggerMessageId ?? undefined);
+    return "om_message";
+  }
+
+  async createCardEntity(card: CardDocument): Promise<string> {
+    this.initializations.push({ kind: "create", card });
+    if (!this.cardId) throw new Error("CardKit unavailable");
+    return this.cardId;
+  }
+
+  async sendCardEntity(
+    chatId: string,
+    cardId: string,
+    triggerMessageId?: string,
+    replyInThread = false,
+  ): Promise<string> {
+    this.initializations.push({
+      kind: "send",
+      chatId,
+      cardId,
+      ...(triggerMessageId ? { triggerMessageId } : {}),
+      replyInThread,
+    });
     return "om_message";
   }
 
   async convertMessageToCard(): Promise<string | undefined> {
+    this.conversions += 1;
     return this.cardId;
   }
 
@@ -63,6 +100,7 @@ const project: ProjectRuntimeConfig = {
     appId: "cli_test",
     appSecret: "secret",
     baseUrl: "https://open.feishu.cn",
+    replyToTrigger: true,
   },
 };
 
@@ -74,6 +112,20 @@ test("runtimeContext activates only inherited Feishu/Lark CC sessions", () => {
       sessionKey: "feishu:oc_chat:ou_user",
       chatId: "oc_chat",
       userId: "ou_user",
+      replyInThread: false,
+    },
+  );
+  assert.deepEqual(
+    runtimeContext({
+      CC_PROJECT: "demo",
+      CC_SESSION_KEY: "feishu:oc_chat:root:om_root",
+    }),
+    {
+      project: "demo",
+      sessionKey: "feishu:oc_chat:root:om_root",
+      chatId: "oc_chat",
+      rootMessageId: "om_root",
+      replyInThread: true,
     },
   );
   assert.equal(
@@ -101,9 +153,21 @@ test("CardKit lifecycle keeps one quoted message and ends in Done", async (t) =>
   const begin = await service.begin();
   assert.equal(begin.active, true);
   assert.equal(begin.transport, "cardkit");
-  assert.equal(sent.length, 1);
-  assert.match(sent[0] ?? "", /正在思考/);
-  assert.match(sent[0] ?? "", /无法展开/);
+  assert.equal(sent.length, 0, "CardKit should be populated before it is sent");
+  assert.equal(client.conversions, 0, "id_convert must not create a visible blank window");
+  assert.deepEqual(
+    client.initializations.map((entry) => entry.kind),
+    ["create", "send"],
+  );
+  assert.match(JSON.stringify(client.initializations[0]), /正在思考/);
+  assert.match(JSON.stringify(client.initializations[0]), /无法展开/);
+  assert.deepEqual(client.initializations[1], {
+    kind: "send",
+    chatId: "oc_chat",
+    cardId: "card_123",
+    triggerMessageId: "om_trigger",
+    replyInThread: false,
+  });
 
   await service.activity("verifying");
   await service.complete("这是最终答案。\n\n```ts\nconst ok = true;\n```");
@@ -113,8 +177,55 @@ test("CardKit lifecycle keeps one quoted message and ends in Done", async (t) =>
   assert.equal(client.cardUpdates.at(-1)?.card.header.title.content, "✅ Done");
   assert.deepEqual(
     client.cardUpdates.map((update) => update.sequence),
-    [1, 2, 3, 5],
+    [1, 2, 4],
   );
+});
+
+test("reply_to_trigger=false sends the populated card without a quote", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const client = new FakeClient("card_123");
+  const service = new TurnService({
+    env: { CC_PROJECT: "demo", CC_SESSION_KEY: "feishu:oc_chat:ou_user" },
+    store: new TurnStateStore(directory),
+    loadProject: async () => ({
+      ...project,
+      feishu: { ...project.feishu, replyToTrigger: false },
+    }),
+    sendMarkdown: async () => undefined,
+    createClient: () => client as unknown as FeishuClient,
+    sleep: async () => undefined,
+  });
+
+  assert.equal((await service.begin()).transport, "cardkit");
+  assert.deepEqual(client.initializations[1], {
+    kind: "send",
+    chatId: "oc_chat",
+    cardId: "card_123",
+    replyInThread: false,
+  });
+});
+
+test("missing trigger falls back to native quoted delivery before creating CardKit", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const client = new FakeClient("card_123", null);
+  const sent: string[] = [];
+  const service = new TurnService({
+    env: { CC_PROJECT: "demo", CC_SESSION_KEY: "feishu:oc_chat:ou_user" },
+    store: new TurnStateStore(directory),
+    loadProject: async () => project,
+    sendMarkdown: async ({ markdown }) => {
+      sent.push(markdown);
+    },
+    createClient: () => client as unknown as FeishuClient,
+    sleep: async () => undefined,
+  });
+
+  assert.equal((await service.begin()).transport, "message_patch");
+  assert.equal(client.initializations.length, 0);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0] ?? "", /正在思考/);
 });
 
 test("message PATCH fallback provides progressive updates on the same message", async (t) => {
@@ -131,6 +242,7 @@ test("message PATCH fallback provides progressive updates on the same message", 
   });
   const begin = await service.begin();
   assert.equal(begin.transport, "message_patch");
+  assert.equal(client.conversions, 0, "fallback must not use id_convert");
   await service.complete("逐步显示这条稍微长一点的回答");
   assert.ok(client.patches.length > 2);
   assert.ok(client.patches.every((patch) => patch.messageId === "om_message"));

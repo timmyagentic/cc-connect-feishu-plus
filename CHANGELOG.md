@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.2 - 2026-08-13
+
+- Create a fully populated CardKit entity before sending or replying with it,
+  eliminating the visible blank-card window caused by placeholder conversion.
+- Preserve `reply_to_trigger` and thread-isolation behavior while selecting the
+  triggering message inside the matching Feishu `root_id`.
+- Remove the deprecated CardKit `id_convert` path. If direct CardKit delivery is
+  unavailable, retain the populated native card and progressively PATCH that
+  same message.
+- Follow Codex terminal semantics by keeping the last assistant message as the
+  final answer; later tool completions, todo lists, plans, and item updates can
+  no longer erase it.
+- Support atomic in-place upgrades from existing automatic-proxy releases while
+  preserving the original uninstall backup and official CC Connect binary.
+
 ## 0.2.1 - 2026-08-13
 
 - Rename the generic tool phase from `正在执行操作…` to the clearer

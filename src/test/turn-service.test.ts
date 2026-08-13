@@ -134,7 +134,7 @@ test("runtimeContext activates only inherited Feishu/Lark CC sessions", () => {
   );
 });
 
-test("CardKit lifecycle keeps one quoted message and ends in Done", async (t) => {
+test("quoted lifecycle delegates exact trigger binding to native CC Connect", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const client = new FakeClient("card_123");
@@ -152,33 +152,21 @@ test("CardKit lifecycle keeps one quoted message and ends in Done", async (t) =>
 
   const begin = await service.begin();
   assert.equal(begin.active, true);
-  assert.equal(begin.transport, "cardkit");
-  assert.equal(sent.length, 0, "CardKit should be populated before it is sent");
+  assert.equal(begin.transport, "message_patch");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0] ?? "", /正在思考/);
+  assert.match(sent[0] ?? "", /无法展开/);
+  assert.equal(client.initializations.length, 0);
   assert.equal(client.conversions, 0, "id_convert must not create a visible blank window");
-  assert.deepEqual(
-    client.initializations.map((entry) => entry.kind),
-    ["create", "send"],
-  );
-  assert.match(JSON.stringify(client.initializations[0]), /正在思考/);
-  assert.match(JSON.stringify(client.initializations[0]), /无法展开/);
-  assert.deepEqual(client.initializations[1], {
-    kind: "send",
-    chatId: "oc_chat",
-    cardId: "card_123",
-    triggerMessageId: "om_trigger",
-    replyInThread: false,
-  });
+  assert.equal(client.patches.length, 1);
 
   await service.activity("verifying");
   await service.complete("这是最终答案。\n\n```ts\nconst ok = true;\n```");
-  assert.equal(client.patches.length, 0);
-  assert.equal(client.textUpdates.length, 1);
-  assert.match(client.textUpdates[0]?.content ?? "", /最终答案/);
-  assert.equal(client.cardUpdates.at(-1)?.card.header.title.content, "✅ Done");
-  assert.deepEqual(
-    client.cardUpdates.map((update) => update.sequence),
-    [1, 2, 4],
-  );
+  assert.equal(client.cardUpdates.length, 0);
+  assert.equal(client.textUpdates.length, 0);
+  assert.ok(client.patches.every((patch) => patch.messageId === "om_message"));
+  assert.match(JSON.stringify(client.patches), /最终答案/);
+  assert.equal(client.patches.at(-1)?.card.header.title.content, "✅ Done");
 });
 
 test("reply_to_trigger=false sends the populated card without a quote", async (t) => {
@@ -235,7 +223,32 @@ test("reply_to_trigger=false keeps an isolated turn inside its Feishu thread", a
   });
 });
 
-test("missing trigger falls back to native quoted delivery before creating CardKit", async (t) => {
+test("quoted thread never infers a newer participant message as its reply target", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const client = new FakeClient("card_123", "om_newer_other_participant");
+  const sent: string[] = [];
+  const service = new TurnService({
+    env: {
+      CC_PROJECT: "demo",
+      CC_SESSION_KEY: "feishu:oc_chat:root:om_root",
+    },
+    store: new TurnStateStore(directory),
+    loadProject: async () => project,
+    sendMarkdown: async ({ markdown }) => {
+      sent.push(markdown);
+    },
+    createClient: () => client as unknown as FeishuClient,
+    sleep: async () => undefined,
+  });
+
+  const begin = await service.begin();
+  assert.equal(begin.transport, "message_patch");
+  assert.equal(sent.length, 1);
+  assert.equal(client.initializations.length, 0);
+});
+
+test("quoted delivery does not require history to infer a trigger message", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const client = new FakeClient("card_123", null);
@@ -285,7 +298,10 @@ test("turn_write appends final-quality chunks through CardKit before completion"
   const service = new TurnService({
     env: { CC_PROJECT: "demo", CC_SESSION_KEY: "feishu:oc_chat:ou_user" },
     store: new TurnStateStore(directory),
-    loadProject: async () => project,
+    loadProject: async () => ({
+      ...project,
+      feishu: { ...project.feishu, replyToTrigger: false },
+    }),
     sendMarkdown: async () => undefined,
     createClient: () => client as unknown as FeishuClient,
     sleep: async () => undefined,
@@ -324,7 +340,10 @@ test("turn_activity renders anonymous progress and preparing answer removes it",
   const service = new TurnService({
     env: { CC_PROJECT: "demo", CC_SESSION_KEY: "feishu:oc_chat:ou_user" },
     store: new TurnStateStore(directory),
-    loadProject: async () => project,
+    loadProject: async () => ({
+      ...project,
+      feishu: { ...project.feishu, replyToTrigger: false },
+    }),
     sendMarkdown: async () => undefined,
     createClient: () => client as unknown as FeishuClient,
     sleep: async () => undefined,
@@ -357,6 +376,7 @@ test("final plugin card applies the project's compact file-reference display", a
     store: new TurnStateStore(directory),
     loadProject: async () => ({
       ...project,
+      feishu: { ...project.feishu, replyToTrigger: false },
       references: {
         normalizeAgents: ["codex"],
         renderPlatforms: ["feishu"],

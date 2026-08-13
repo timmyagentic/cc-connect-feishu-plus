@@ -79,11 +79,11 @@ npm exec --yes \
 ## 交互效果
 
 - 收到消息后立即建立一张已经包含状态正文的卡片；不会先发送空 CardKit 实体，因此不会出现一段全白的首屏。
-- `reply_to_trigger = true` 时引用原始提问；关闭时普通发送。开启 `thread_isolation` 的会话继续在对应话题内回复。
+- `reply_to_trigger = true` 时由 CC Connect 原生的当前回合 `replyCtx` 精确引用原始提问，插件不会从群聊历史猜测触发消息；关闭时普通发送。开启 `thread_isolation` 的会话继续在对应话题内回复。
 - 推理阶段显示 `正在思考…`，执行工具时显示 `正在调用工具…`。
 - 状态卡只用匿名计数反馈活动，例如 `推理 2 次 · 工具 7 次`；连续调用工具时计数会持续推进。
 - 推理内容、Bash、工具名称、参数和输出不会进入卡片，也不存在可以展开的控件。
-- 最终正文在同一张卡片中呈现；CardKit 可用时使用原生文本动画，不可用时退化为同一消息的渐进 PATCH。
+- 最终正文在同一张卡片中呈现；关闭引用回复时可使用 CardKit 原生文本动画，开启引用回复时使用同一条原生引用消息的渐进 PATCH，优先保证回复关系绝对正确。
 - 完成后显示明确的 `✅ Done`，不显示模型、token、上下文、工作目录等状态尾巴。
 - 读取项目现有的文件引用显示配置；`smart + emoji + code` 可把绝对路径安全缩短成带文件/目录标记的易读引用。
 - 插件无法安全接管时自动回退到 CC Connect 原生回答，不吞掉用户结果。
@@ -99,7 +99,12 @@ flowchart LR
     U["飞书用户消息"] --> N["CC Connect 原生飞书连接"]
     N --> P["Feishu Plus Codex 透明代理"]
     P --> C["真实 Codex CLI"]
-    P -->|"先创建有正文的卡片实体，再引用回复"| F["同一张 Card 2.0 卡片"]
+    P --> D{"需要引用原消息?"}
+    D -->|"是"| R["原生 /send 绑定当前 replyCtx"]
+    D -->|"否"| K["直接创建 CardKit 实体"]
+    R --> F["同一张 Card 2.0 卡片"]
+    K --> F
+    P -->|"匿名状态与最终正文"| F
     P -->|"最终仅返回 NO_REPLY"| N
 ```
 
@@ -114,12 +119,12 @@ flowchart LR
 自动代理的处理顺序：
 
 1. CC Connect 收到飞书消息，并像原来一样启动所选项目的 Codex Agent。
-2. 安装后的 `cmd` 立即启动真实 Codex，同时读取最近消息，确定本回合的触发消息与话题根消息。
-3. 插件先以完整的“正在思考”Card 2.0 JSON 创建 CardKit 实体，再按 `reply_to_trigger` 选择引用回复或普通发送。卡片第一次出现在聊天中时已经有正文。
+2. 安装后的 `cmd` 立即启动真实 Codex，同时读取发送前的消息快照，供后续找回插件自己的状态卡片。
+3. 开启 `reply_to_trigger` 时，插件调用 CC Connect 原生 `/send`，由当前 Agent 回合内部保存的精确 `replyCtx` 建立一张已有“正在思考”正文的引用卡片，再接管这条消息；它不会从最近聊天记录猜测回复对象。关闭引用回复时，插件直接创建已有正文的 CardKit 实体；话题会话使用根消息作为纯路由锚点。
 4. 代理观察 Codex JSONL。reasoning 和 tool 事件只更新匿名计数与固定状态，原始内容立即丢弃。
 5. 以回合内最后一条 `agent_message` 作为最终答案；其后的 tool 完成、todo/plan 等收尾事件不能清空它。最终正文写入同一张卡片并标记 `Done`。
 6. 代理只向 CC Connect 返回 `NO_REPLY`，避免再产生一条原生答案。
-7. CardKit 建立失败时，插件通过 CC Connect 原生 `/send` 发送已有正文的兼容卡片，并在同一消息上渐进 PATCH；两条路径都不再使用已废弃的 `id_convert`。如果接管彻底失败，代理恢复原始最终事件，让 CC Connect 正常兜底。
+7. 直接 CardKit 建立失败时，插件同样退回 CC Connect 原生 `/send` 的已有正文卡片，并在同一消息上渐进 PATCH；所有路径都不再使用已废弃的 `id_convert`。如果接管彻底失败，代理恢复原始最终事件，让 CC Connect 正常兜底。
 
 ## 安装细节与迁移
 
@@ -171,16 +176,17 @@ npx --yes cc-connect-feishu-plus@0.2.2 install --project "Codex"
 
 ## 飞书权限
 
-插件在发送卡片前会先读取会话历史，以确定真实触发消息；话题会话还会按 `root_id` 限定范围，避免高流量群聊中引用错人。缺少该权限时不会留下卡住的卡片，而是直接使用 CC Connect 原生回复。
+插件会读取发送前后的会话快照，用于找回它刚由原生 `/send` 建立的状态卡片 `message_id`；引用目标始终由 CC Connect 当前回合内部的原生 `replyCtx` 决定，不从历史消息推断。话题快照按 `root_id` 限定范围。发送前无法取得安全上下文时不会创建状态卡；发送后若无法唯一确认当前机器人刚创建的卡片，插件会停止接管并保留 CC Connect 的原生回复路径。
 
 应用需要具备以下 API 对应的权限：
 
 - [获取会话历史消息](https://open.feishu.cn/document/server-docs/im-v1/message/list)
+- [获取机器人信息](https://open.feishu.cn/document/client-docs/bot-v3/obtain-bot-info)（用于校验状态卡确由当前机器人发送；该接口无需额外权限）
 - [回复消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/reply)
 - [发送消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/create)
 - [更新应用发送的消息](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/patch)
 
-以下 CardKit 能力用于更丝滑的文本动画；不可用时会自动降级为整卡 PATCH：
+以下 CardKit 能力在关闭引用回复时用于更丝滑的文本动画；不可用时会自动降级为整卡 PATCH。开启引用回复时，为保留 CC Connect 掌握的精确引用关系，会直接使用同一条原生消息的整卡 PATCH：
 
 - [创建卡片实体](https://open.feishu.cn/document/cardkit-v1/card/create)
 - [全量更新卡片](https://open.feishu.cn/document/cardkit-v1/card/update)
@@ -204,7 +210,8 @@ npx --yes cc-connect-feishu-plus@0.2.2 uninstall
 
 - `0.2.2` 只支持 Codex `exec`；CC Connect 的 Codex `app_server` 和其他 Agent 保持原生行为。
 - 单卡片最终正文上限为 24,000 个 Unicode 字符。
-- 插件依赖飞书历史消息 API 定位触发消息；若 CardKit 不可用，兼容路径还会用它定位刚刚由原生适配器发出的状态卡片。
+- 插件依赖飞书历史消息 API 定位刚刚由原生适配器发出的状态卡片，但不会用历史记录推断引用目标。
+- `reply_to_trigger = true` 使用精确的原生引用关系与同消息 PATCH；CardKit 原生流式文本更新只用于不引用原消息的路径。
 - Codex `exec --json` 没有逐 token 的最终正文事件，因此真正的正文动画仍在最终 `agent_message` 到达后开始。
 
 ## 开发与验证

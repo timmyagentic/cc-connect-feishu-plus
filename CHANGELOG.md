@@ -2,10 +2,13 @@
 
 ## 0.2.2 - 2026-08-13
 
-- Create a fully populated CardKit entity before sending or replying with it,
+- Establish a fully populated Card 2.0 message before any plugin update,
   eliminating the visible blank-card window caused by placeholder conversion.
-- Preserve `reply_to_trigger` and thread-isolation behavior while selecting the
-  triggering message inside the matching Feishu `root_id`.
+- Delegate quoted delivery to CC Connect's live native `replyCtx`, so the card
+  binds to the exact inbound message instead of inferring a trigger from chat
+  history when other participants are active in the same thread.
+- Resolve redacted native status cards only when their sender matches the
+  authenticated bot identity; ambiguous concurrent bot messages fail closed.
 - Keep thread-isolated turns inside their Feishu topic even when
   `reply_to_trigger = false`, using the topic root only as a routing anchor.
 - Remove the deprecated CardKit `id_convert` path. If direct CardKit delivery is

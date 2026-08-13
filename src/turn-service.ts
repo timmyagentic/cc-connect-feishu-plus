@@ -172,7 +172,7 @@ export class TurnService {
       } catch (error) {
         return {
           active: false,
-          instruction: `Feishu Plus lacks chat-history access (${safeError(error)}). Reply normally through native CC Connect; no placeholder was sent.`,
+          instruction: `Feishu Plus could not capture safe message context (${safeError(error)}). Reply normally through native CC Connect; no placeholder was sent.`,
         };
       }
       if (existing) {
@@ -189,37 +189,38 @@ export class TurnService {
       const initialCard = workingCard("analyzing");
       let state: TurnState | undefined;
 
-      try {
-        const deliveryMessageId = project.feishu.replyToTrigger
-          ? snapshot.triggerMessageId
-          : context.replyInThread
+      if (!project.feishu.replyToTrigger) {
+        try {
+          const routingMessageId = context.replyInThread
             ? context.rootMessageId
             : undefined;
-        if (project.feishu.replyToTrigger && !deliveryMessageId) {
-          throw new Error("could not identify the triggering Feishu message");
+          const cardId = await client.createCardEntity(initialCard);
+          const messageId = await client.sendCardEntity(
+            context.chatId,
+            cardId,
+            routingMessageId,
+            context.replyInThread,
+          );
+          state = {
+            version: 1,
+            turnId,
+            project: context.project,
+            sessionKey: context.sessionKey,
+            chatId: context.chatId,
+            marker,
+            messageId,
+            cardId,
+            transport: "cardkit",
+            sequence: 0,
+            phase: "analyzing",
+            startedAt: new Date().toISOString(),
+          };
+        } catch {
+          // Fall through to the populated native-message path below.
         }
-        const cardId = await client.createCardEntity(initialCard);
-        const messageId = await client.sendCardEntity(
-          context.chatId,
-          cardId,
-          deliveryMessageId,
-          context.replyInThread,
-        );
-        state = {
-          version: 1,
-          turnId,
-          project: context.project,
-          sessionKey: context.sessionKey,
-          chatId: context.chatId,
-          marker,
-          messageId,
-          cardId,
-          transport: "cardkit",
-          sequence: 0,
-          phase: "analyzing",
-          startedAt: new Date().toISOString(),
-        };
-      } catch {
+      }
+
+      if (!state) {
         try {
           await this.sendMarkdown({
             project: context.project,

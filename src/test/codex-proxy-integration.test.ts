@@ -58,18 +58,21 @@ test("bundled proxy owns one privacy-safe card without MCP cooperation", async (
   await mkdir(runDirectory, { recursive: true });
   const socket = join(runDirectory, "api.sock");
   let sendCalls = 0;
+  let placeholderSent = false;
+  const ccBodies: string[] = [];
+  const timeline: string[] = [];
 
   const ccServer = createServer(async (request, response) => {
     sendCalls += 1;
-    await collectRequestBody(request);
+    ccBodies.push(await collectRequestBody(request));
+    placeholderSent = true;
+    timeline.push("native-send");
     json(response, { status: "ok" });
   });
   await listenUnix(ccServer, socket);
   t.after(() => close(ccServer));
 
   const cardBodies: string[] = [];
-  const timeline: string[] = [];
-  const replyBodies: string[] = [];
   const feishuServer = createServer(async (request, response) => {
     const url = request.url ?? "";
     if (url === "/open-apis/auth/v3/tenant_access_token/internal") {
@@ -77,32 +80,75 @@ test("bundled proxy owns one privacy-safe card without MCP cooperation", async (
       json(response, { code: 0, tenant_access_token: "token", expire: 7200 });
       return;
     }
+    if (request.method === "GET" && url === "/open-apis/bot/v3/info") {
+      json(response, { code: 0, bot: { open_id: "ou_bot" } });
+      return;
+    }
     if (request.method === "GET" && url.startsWith("/open-apis/im/v1/messages?")) {
-      const trigger = {
-        message_id: "om_trigger",
+      const root = {
+        message_id: "om_root",
         msg_type: "text",
-        sender: { id: "ou_user", sender_type: "user" },
+        sender: { id: "ou_original", sender_type: "user" },
         body: { content: "question" },
+      };
+      const actualTrigger = {
+        message_id: "om_actual_trigger",
+        root_id: "om_root",
+        msg_type: "text",
+        sender: { id: "ou_requester", sender_type: "user" },
+        body: { content: "actual question" },
+      };
+      const newerOtherParticipant = {
+        message_id: "om_newer_other_participant",
+        root_id: "om_root",
+        msg_type: "text",
+        sender: { id: "ou_other", sender_type: "user" },
+        body: { content: "newer unrelated message" },
+      };
+      const placeholder = {
+        message_id: "om_placeholder",
+        parent_id: "om_actual_trigger",
+        root_id: "om_root",
+        msg_type: "interactive",
+        sender: { id: "ou_bot", sender_type: "app" },
+        body: { content: "redacted Card 2.0 body" },
       };
       json(response, {
         code: 0,
-        data: { items: [trigger] },
+        data: {
+          items: [
+            ...(placeholderSent ? [placeholder] : []),
+            newerOtherParticipant,
+            actualTrigger,
+            root,
+          ],
+        },
       });
       return;
     }
     if (request.method === "POST" && url === "/open-apis/cardkit/v1/cards") {
-      timeline.push("create-card");
+      timeline.push("direct-cardkit-create");
       cardBodies.push(await collectRequestBody(request));
       json(response, { code: 0, data: { card_id: "card_123" } });
       return;
     }
     if (
       request.method === "POST" &&
-      url === "/open-apis/im/v1/messages/om_trigger/reply"
+      url.startsWith("/open-apis/im/v1/messages/") &&
+      url.endsWith("/reply")
     ) {
-      timeline.push("reply-card");
-      replyBodies.push(await collectRequestBody(request));
+      timeline.push(`direct-reply:${url}`);
+      await collectRequestBody(request);
       json(response, { code: 0, data: { message_id: "om_card" } });
+      return;
+    }
+    if (
+      request.method === "PATCH" &&
+      url === "/open-apis/im/v1/messages/om_placeholder"
+    ) {
+      timeline.push("patch-native-message");
+      cardBodies.push(await collectRequestBody(request));
+      json(response, { code: 0, data: {} });
       return;
     }
     if (url.startsWith("/open-apis/cardkit/v1/cards/card_123")) {
@@ -181,7 +227,7 @@ for (const event of events) console.log(JSON.stringify(event));
           HOME: directory,
           CC_DATA_DIR: data,
           CC_PROJECT: "demo",
-          CC_SESSION_KEY: "feishu:oc_chat:ou_user",
+          CC_SESSION_KEY: "feishu:oc_chat:root:om_root",
         },
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -202,18 +248,13 @@ for (const event of events) console.log(JSON.stringify(event));
   );
 
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(sendCalls, 0);
-  assert.deepEqual(timeline, ["create-card", "reply-card"]);
-  assert.equal(replyBodies.length, 1);
-  const replyBody = replyBodies[0] ?? "";
-  const reply = JSON.parse(replyBody) as { msg_type: string; content: string };
-  const replyContent = JSON.parse(reply.content) as {
-    type: string;
-    data: { card_id: string };
-  };
-  assert.equal(reply.msg_type, "interactive");
-  assert.deepEqual(replyContent, { type: "card", data: { card_id: "card_123" } });
-  assert.doesNotMatch(replyBody, /正在思考|PRIVATE_/);
+  assert.equal(sendCalls, 1);
+  assert.match(ccBodies[0] ?? "", /正在思考/);
+  assert.match(ccBodies[0] ?? "", /feishu:oc_chat:root:om_root/);
+  assert.doesNotMatch(ccBodies[0] ?? "", /PRIVATE_/);
+  assert.equal(timeline[0], "native-send");
+  assert.ok(timeline.includes("patch-native-message"));
+  assert.ok(timeline.every((item) => !item.startsWith("direct-")), timeline.join(", "));
   assert.match(result.stdout, /thread\.started/);
   assert.match(result.stdout, /NO_REPLY/);
   assert.doesNotMatch(result.stdout, /PRIVATE_|这是最终答案/);

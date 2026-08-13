@@ -18,7 +18,7 @@ const config = {
   replyToTrigger: true,
 };
 
-test("Feishu client creates a populated CardKit entity before sending a quoted reply", async () => {
+test("Feishu client creates a populated CardKit entity before using an explicit reply anchor", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const responses = [
     jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
@@ -48,51 +48,63 @@ test("Feishu client creates a populated CardKit entity before sending a quoted r
 });
 
 test("Feishu client resolves a redacted Card 2.0 placeholder from a before-send snapshot", async () => {
-  const responses = [
-    jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
-    jsonResponse({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_trigger",
-            msg_type: "text",
-            sender: { id: "ou_user", sender_type: "user" },
-            body: { content: JSON.stringify({ text: "question" }) },
+  let historyCalls = 0;
+  const fetchMock = async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
+      return jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 });
+    }
+    if (url.endsWith("/open-apis/bot/v3/info")) {
+      return jsonResponse({ code: 0, bot: { open_id: "ou_bot" } });
+    }
+    if (url.includes("/open-apis/im/v1/messages?")) {
+      historyCalls += 1;
+      if (historyCalls === 1) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            items: [
+              {
+                message_id: "om_newer_other_participant",
+                msg_type: "text",
+                sender: { id: "ou_other", sender_type: "user" },
+              },
+            ],
           },
-        ],
-      },
-    }),
-    jsonResponse({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "om_placeholder",
-            msg_type: "interactive",
-            parent_id: "om_trigger",
-            sender: { id: "ou_bot", sender_type: "app" },
-            body: {
-              content: JSON.stringify({
-                title: null,
-                elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]],
-              }),
+        });
+      }
+      return jsonResponse({
+        code: 0,
+        data: {
+          items: [
+            {
+              message_id: "om_other_bot_card",
+              msg_type: "interactive",
+              parent_id: "om_newer_other_participant",
+              sender: { id: "ou_other_bot", sender_type: "app" },
+              body: { content: "redacted Card 2.0 body" },
             },
-          },
-          {
-            message_id: "om_trigger",
-            msg_type: "text",
-            sender: { id: "ou_user", sender_type: "user" },
-            body: { content: JSON.stringify({ text: "question" }) },
-          },
-        ],
-      },
-    }),
-  ];
-  const fetchMock = async () => responses.shift() ?? jsonResponse({ code: 1 }, 500);
+            {
+              message_id: "om_placeholder",
+              msg_type: "interactive",
+              parent_id: "om_actual_trigger",
+              sender: { id: "ou_bot", sender_type: "app" },
+              body: { content: "redacted Card 2.0 body" },
+            },
+            {
+              message_id: "om_newer_other_participant",
+              msg_type: "text",
+              sender: { id: "ou_other", sender_type: "user" },
+            },
+          ],
+        },
+      });
+    }
+    return jsonResponse({ code: 1 }, 500);
+  };
   const client = new FeishuClient(config, fetchMock as typeof fetch);
 
-  const snapshot = await client.captureMessageSnapshot("oc_chat", "ou_user");
+  const snapshot = await client.captureMessageSnapshot("oc_chat");
   assert.equal(
     await client.findPlaceholderMessage("oc_chat", "ccfp-marker", snapshot, 1),
     "om_placeholder",
@@ -107,6 +119,20 @@ test("CardKit entity creation reports permission failure to the caller", async (
   const fetchMock = async () => responses.shift() ?? jsonResponse({ code: 1 }, 500);
   const client = new FeishuClient(config, fetchMock as typeof fetch);
   await assert.rejects(client.createCardEntity(workingCard("analyzing")), /permission denied/);
+});
+
+test("message snapshot fails closed when the sending bot identity is unavailable", async () => {
+  const responses = [
+    jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
+    jsonResponse({ code: 0, data: { items: [] } }),
+    jsonResponse({ code: 1, msg: "bot unavailable" }),
+  ];
+  const fetchMock = async () => responses.shift() ?? jsonResponse({ code: 1 }, 500);
+  const client = new FeishuClient(config, fetchMock as typeof fetch);
+  await assert.rejects(
+    client.captureMessageSnapshot("oc_chat"),
+    /bot identity request failed: bot unavailable/,
+  );
 });
 
 test("Feishu client sends a standalone card entity when native reply is disabled", async () => {
@@ -148,6 +174,7 @@ test("chat-history snapshot succeeds without sending a message", async () => {
   const responses = [
     jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
     jsonResponse({ code: 0, data: { items: [] } }),
+    jsonResponse({ code: 0, bot: { open_id: "ou_bot" } }),
   ];
   const fetchMock = async (input: string | URL | Request) => {
     calls.push(String(input));
@@ -159,7 +186,7 @@ test("chat-history snapshot succeeds without sending a message", async () => {
   assert.ok(calls.every((url) => !url.includes("\/messages\/")));
 });
 
-test("thread snapshot selects the latest user message inside the matching root", async () => {
+test("thread snapshot records its root and the authenticated bot identity", async () => {
   const responses = [
     jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
     jsonResponse({
@@ -183,6 +210,7 @@ test("thread snapshot selects the latest user message inside the matching root",
         ],
       },
     }),
+    jsonResponse({ code: 0, bot: { open_id: "ou_bot" } }),
   ];
   const fetchMock = async () => responses.shift() ?? jsonResponse({ code: 1 }, 500);
   const client = new FeishuClient(config, fetchMock as typeof fetch);
@@ -191,7 +219,8 @@ test("thread snapshot selects the latest user message inside the matching root",
     undefined,
     "om_root",
   );
-  assert.equal(snapshot.triggerMessageId, "om_thread_reply");
+  assert.equal(snapshot.rootMessageId, "om_root");
+  assert.equal(snapshot.botOpenId, "ou_bot");
 });
 
 test("read-only history permission check returns the visible item count", async () => {

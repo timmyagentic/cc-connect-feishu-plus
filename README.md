@@ -1,10 +1,80 @@
 # CC Connect Feishu Plus
 
-一个独立安装的 npm companion plugin，为 CC Connect 的 Codex 飞书入口提供自动、隐私安全的单卡片体验。
+[![npm version](https://img.shields.io/npm/v/cc-connect-feishu-plus.svg)](https://www.npmjs.com/package/cc-connect-feishu-plus)
+[![CI](https://github.com/timmyagentic/cc-connect-feishu-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/timmyagentic/cc-connect-feishu-plus/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+一个独立安装的 npm companion plugin，为 CC Connect 的 Codex 飞书入口提供自动、隐私安全的单卡片体验：即时状态、匿名进度、同卡最终答案、明确 Done，以及无冗余尾巴的 Card 2.0 展示。
 
 它不是 CC Connect 的 fork，也不使用 MCP。CC Connect 继续负责飞书入站、权限规则和会话路由；插件通过 CC Connect 已支持的 Agent `cmd` 配置运行一个透明 Codex 进程代理，并用自己的 Card 2.0 卡片接管本回合的展示，同时遵循原项目的引用回复与话题隔离配置。
 
-> 当前版本：`0.2.2`。支持 CC Connect `1.4.1+` 的 Codex `exec` 后端。
+> 当前稳定版：`0.2.2`。支持 Node.js `20+`、CC Connect `1.4.1+` 和 Codex `exec` 后端。官方 CC Connect 二进制、飞书连接和原生回退能力都会保留。
+
+## 一键安装
+
+在已经能正常使用飞书机器人的 CC Connect 主机上执行：
+
+```bash
+npx --yes cc-connect-feishu-plus@latest install
+```
+
+安装器会自动发现所有兼容的 Codex/Feishu 项目并安全接线。它不会在 Agent 回合进行中强制重启服务；安装完成后，请使用这台主机**原有的服务管理方式**重启现有 CC Connect，再执行：
+
+```bash
+npx --yes cc-connect-feishu-plus@latest doctor
+```
+
+需要固定可复现版本时，把 `@latest` 改为 `@0.2.2`。只安装某个项目时追加 `--project "Codex"`；可以重复传入该参数。
+
+### 复制给 Agent
+
+下面这段可以原样交给本机 Agent：
+
+```text
+请在当前主机安装 cc-connect-feishu-plus 0.2.2：
+1. 先运行 `npx --yes cc-connect-feishu-plus@0.2.2 install --dry-run`，确认至少发现一个兼容的 Codex/Feishu 项目。
+2. 确认当前没有正在执行的 CC Connect Agent 回合，再运行 `npx --yes cc-connect-feishu-plus@0.2.2 install`。
+3. 只使用这台主机原有的服务管理方式重启现有 CC Connect；不要启动第二个 CC Connect 实例，也不要建立第二条飞书连接。
+4. 运行 `npx --yes cc-connect-feishu-plus@0.2.2 doctor`，逐项报告结果。
+5. 不要修改官方 cc-connect 二进制，不要安装 MCP，不要覆盖用户在安装后产生的配置改动。若 dry-run、安装或 doctor 失败，请保留原生 CC Connect，并报告具体失败项。
+```
+
+### Agent 安装契约
+
+```yaml
+package: cc-connect-feishu-plus
+version: 0.2.2
+runtime: node >= 20
+host: cc-connect >= 1.4.1
+supported_backend: codex exec
+commands:
+  plan: npx --yes cc-connect-feishu-plus@0.2.2 install --dry-run
+  install: npx --yes cc-connect-feishu-plus@0.2.2 install
+  verify: npx --yes cc-connect-feishu-plus@0.2.2 doctor
+  uninstall: npx --yes cc-connect-feishu-plus@0.2.2 uninstall
+post_install:
+  - restart the existing CC Connect service with its existing service manager
+  - start a new Feishu conversation for verification
+writes:
+  - ~/.cc-connect/config.toml
+  - ~/.cc-connect/feishu-plus/
+must_preserve:
+  - official cc-connect binary
+  - the single native Feishu connection
+  - native routing, permissions, quoted replies, and fallback
+must_not_add:
+  - MCP server
+  - second CC Connect instance
+  - second Feishu event connection
+```
+
+如果 npm Registry 暂时不可用，可以从对应 GitHub Release tag 执行同一个 CLI：
+
+```bash
+npm exec --yes \
+  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
+  -- cc-connect-feishu-plus install
+```
 
 ## 交互效果
 
@@ -51,7 +121,7 @@ flowchart LR
 6. 代理只向 CC Connect 返回 `NO_REPLY`，避免再产生一条原生答案。
 7. CardKit 建立失败时，插件通过 CC Connect 原生 `/send` 发送已有正文的兼容卡片，并在同一消息上渐进 PATCH；两条路径都不再使用已废弃的 `id_convert`。如果接管彻底失败，代理恢复原始最终事件，让 CC Connect 正常兜底。
 
-## 安装
+## 安装细节与迁移
 
 前置条件：
 
@@ -60,37 +130,25 @@ flowchart LR
 - 目标项目使用 Codex `exec` 后端；`app_server` 和 Claude Code 暂不支持；
 - 飞书项目建议开启 `reply_to_trigger = true`，以保留清晰的引用关系。
 
-先执行只读检查：
+发布或批量部署前，建议先执行只读检查：
 
 ```bash
-npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
-  -- cc-connect-feishu-plus install --dry-run
+npx --yes cc-connect-feishu-plus@0.2.2 install --dry-run
 ```
 
 安装所有兼容的 Codex/Feishu 项目：
 
 ```bash
-npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
-  -- cc-connect-feishu-plus install
+npx --yes cc-connect-feishu-plus@0.2.2 install
 ```
 
 只安装指定项目时，可重复传入 `--project`：
 
 ```bash
-npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
-  -- cc-connect-feishu-plus install --project "Codex"
+npx --yes cc-connect-feishu-plus@0.2.2 install --project "Codex"
 ```
 
 安装器不会自动重启 CC Connect。请在没有进行中 Agent 回合时重启 CC Connect，然后新建会话测试。
-
-正式发布到 npm Registry 后，等价命令为：
-
-```bash
-npx --yes cc-connect-feishu-plus@0.2.2 install
-```
 
 ### 从 0.1.x 迁移
 
@@ -133,17 +191,13 @@ npx --yes cc-connect-feishu-plus@0.2.2 install
 ## 检查与卸载
 
 ```bash
-npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
-  -- cc-connect-feishu-plus doctor
+npx --yes cc-connect-feishu-plus@0.2.2 doctor
 ```
 
 `doctor` 检查原生 socket、安装清单、配置完整性、代理接线、运行时哈希、旧 MCP 残留、官方二进制基线和单飞书连接边界。
 
 ```bash
-npm exec --yes \
-  --package=github:timmyagentic/cc-connect-feishu-plus#v0.2.2 \
-  -- cc-connect-feishu-plus uninstall
+npx --yes cc-connect-feishu-plus@0.2.2 uninstall
 ```
 
 ## 当前限制

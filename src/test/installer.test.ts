@@ -22,11 +22,27 @@ app_secret = "secret"
 reply_to_trigger = true
 `;
 
+const MULTI_PROJECT_CONFIG = `${CONFIG}
+[[projects]]
+name = "other"
+
+[projects.agent]
+type = "codex"
+
+[[projects.platforms]]
+type = "feishu"
+
+[projects.platforms.options]
+app_id = "cli_other"
+app_secret = "secret"
+reply_to_trigger = true
+`;
+
 function digest(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function fixture(prefix: string): Promise<{
+async function fixture(prefix: string, config = CONFIG): Promise<{
   directory: string;
   data: string;
   configPath: string;
@@ -39,7 +55,7 @@ async function fixture(prefix: string): Promise<{
   const configPath = join(directory, "config.toml");
   const binaryPath = join(directory, "cc-connect");
   const runtimeSourcePath = join(directory, "codex-proxy.mjs");
-  await writeFile(configPath, CONFIG, { mode: 0o600 });
+  await writeFile(configPath, config, { mode: 0o600 });
   await writeFile(binaryPath, "#!/bin/sh\necho 'cc-connect v1.4.1'\n", {
     mode: 0o755,
   });
@@ -158,8 +174,8 @@ test("reinstall repairs a missing proxy runtime without touching the backup", as
   assert.equal((await stat(repaired.runtimeExecutablePath)).mode & 0o777, 0o700);
 });
 
-test("patch upgrade preserves the original backup and rewires the runtime atomically", async (t) => {
-  const item = await fixture("ccfp-upgrade-");
+test("scoped patch upgrade preserves every installed project and rewires atomically", async (t) => {
+  const item = await fixture("ccfp-upgrade-", MULTI_PROJECT_CONFIG);
   t.after(() => rm(item.directory, { recursive: true, force: true }));
   const initial = await install({
     configPath: item.configPath,
@@ -172,7 +188,12 @@ test("patch upgrade preserves the original backup and rewires the runtime atomic
     configAfterSha256: string;
     runtimeExecutablePath: string;
     runtimeExecutableSha256: string;
+    projects: Array<{ name: string }>;
   };
+  assert.deepEqual(
+    manifest.projects.map((project) => project.name),
+    ["demo", "other"],
+  );
   const oldRuntimePath = initial.runtimeExecutablePath.replace(
     `v${PACKAGE_VERSION}`,
     "v0.2.1",
@@ -209,19 +230,31 @@ test("patch upgrade preserves the original backup and rewires the runtime atomic
     configPath: item.configPath,
     env: item.env,
     runtimeSourcePath: item.runtimeSourcePath,
+    projectNames: ["demo"],
   });
   const upgradedManifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
     packageVersion: string;
     backupPath: string;
+    projects: Array<{ name: string }>;
   };
   assert.equal(upgraded.changed, true);
   assert.equal(upgraded.backupPath, initial.backupPath);
   assert.equal(upgradedManifest.packageVersion, PACKAGE_VERSION);
-  assert.match(await readFile(item.configPath, "utf8"), /runtime\/v0\.2\.2/);
+  assert.deepEqual(
+    upgraded.projects.map((project) => project.name),
+    ["demo", "other"],
+  );
+  assert.deepEqual(
+    upgradedManifest.projects.map((project) => project.name),
+    ["demo", "other"],
+  );
+  const upgradedConfig = await readFile(item.configPath, "utf8");
+  assert.equal(upgradedConfig.match(/runtime\/v0\.2\.2/g)?.length, 2);
+  assert.doesNotMatch(upgradedConfig, /runtime\/v0\.2\.1/);
   await assert.rejects(stat(oldRuntimePath), /ENOENT/);
 
   await uninstall({ env: item.env });
-  assert.equal(await readFile(item.configPath, "utf8"), CONFIG);
+  assert.equal(await readFile(item.configPath, "utf8"), MULTI_PROJECT_CONFIG);
 });
 
 test("legacy MCP registration fails closed", async (t) => {

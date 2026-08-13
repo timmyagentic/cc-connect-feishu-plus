@@ -6,6 +6,8 @@
   eliminating the visible blank-card window caused by placeholder conversion.
 - Preserve `reply_to_trigger` and thread-isolation behavior while selecting the
   triggering message inside the matching Feishu `root_id`.
+- Keep thread-isolated turns inside their Feishu topic even when
+  `reply_to_trigger = false`, using the topic root only as a routing anchor.
 - Remove the deprecated CardKit `id_convert` path. If direct CardKit delivery is
   unavailable, retain the populated native card and progressively PATCH that
   same message.
@@ -14,6 +16,8 @@
   no longer erase it.
 - Support atomic in-place upgrades from existing automatic-proxy releases while
   preserving the original uninstall backup and official CC Connect binary.
+- Preserve and rewire every previously managed project during a scoped patch
+  upgrade before removing the old shared proxy runtime.
 
 ## 0.2.1 - 2026-08-13
 

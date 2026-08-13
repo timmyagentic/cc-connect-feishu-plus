@@ -206,6 +206,35 @@ test("reply_to_trigger=false sends the populated card without a quote", async (t
   });
 });
 
+test("reply_to_trigger=false keeps an isolated turn inside its Feishu thread", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const client = new FakeClient("card_123");
+  const service = new TurnService({
+    env: {
+      CC_PROJECT: "demo",
+      CC_SESSION_KEY: "feishu:oc_chat:root:om_root",
+    },
+    store: new TurnStateStore(directory),
+    loadProject: async () => ({
+      ...project,
+      feishu: { ...project.feishu, replyToTrigger: false },
+    }),
+    sendMarkdown: async () => undefined,
+    createClient: () => client as unknown as FeishuClient,
+    sleep: async () => undefined,
+  });
+
+  assert.equal((await service.begin()).transport, "cardkit");
+  assert.deepEqual(client.initializations[1], {
+    kind: "send",
+    chatId: "oc_chat",
+    cardId: "card_123",
+    triggerMessageId: "om_root",
+    replyInThread: true,
+  });
+});
+
 test("missing trigger falls back to native quoted delivery before creating CardKit", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

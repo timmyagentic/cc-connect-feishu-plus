@@ -190,17 +190,19 @@ export class TurnService {
       let state: TurnState | undefined;
 
       try {
-        const triggerMessageId = project.feishu.replyToTrigger
+        const deliveryMessageId = project.feishu.replyToTrigger
           ? snapshot.triggerMessageId
-          : undefined;
-        if (project.feishu.replyToTrigger && !triggerMessageId) {
+          : context.replyInThread
+            ? context.rootMessageId
+            : undefined;
+        if (project.feishu.replyToTrigger && !deliveryMessageId) {
           throw new Error("could not identify the triggering Feishu message");
         }
         const cardId = await client.createCardEntity(initialCard);
         const messageId = await client.sendCardEntity(
           context.chatId,
           cardId,
-          triggerMessageId,
+          deliveryMessageId,
           context.replyInThread,
         );
         state = {

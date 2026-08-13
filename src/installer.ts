@@ -135,17 +135,21 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       "an install manifest already exists but the managed config changed; run doctor before reinstalling",
     );
   }
+  const projectNames = existing
+    ? [
+        ...new Set([
+          ...existing.projects.map((project) => project.name),
+          ...(options.projectNames ?? []),
+        ]),
+      ]
+    : options.projectNames;
   const rendered = renderConfigForInstall(
     originalText,
     {
       nodeExecutablePath,
       runtimeExecutablePath: runtimeTarget,
       configPath: path,
-      ...(options.projectNames
-        ? { projectNames: options.projectNames }
-        : existing
-          ? { projectNames: existing.projects.map((project) => project.name) }
-          : {}),
+      ...(projectNames ? { projectNames } : {}),
     },
     env,
   );

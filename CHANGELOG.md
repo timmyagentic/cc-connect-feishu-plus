@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 - 2026-08-13
+
+- Rename the generic tool phase from `正在执行操作…` to the clearer
+  `正在调用工具…`.
+- Show privacy-safe `推理 N 次 · 工具 N 次` progress on the same locked card
+  without exposing reasoning text, tool names, arguments, commands, or output.
+- Deduplicate Codex item start/completion pairs with hashed ephemeral item keys,
+  including a safe fallback for lifecycle events that omit an item ID.
+- Keep early and slow activity visibly fresh while coalescing rapid long bursts
+  into bounded progress milestones to avoid excessive full-card updates.
+- Remove activity counters when answer preparation starts and keep the final
+  card limited to the answer and explicit Done state.
+
 ## 0.2.0 - 2026-08-13
 
 - Replace the cooperative MCP implementation with an automatic transparent

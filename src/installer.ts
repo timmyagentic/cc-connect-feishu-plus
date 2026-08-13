@@ -65,7 +65,7 @@ async function readUnknownManifest(
 function requireCurrentManifest(value: UnknownManifest): InstallManifest {
   if (value.version !== 2) {
     throw new Error(
-      "a legacy Feishu Plus MCP installation is still recorded; uninstall v0.1.2 before installing v0.2.0",
+      `a legacy Feishu Plus MCP installation is still recorded; uninstall v0.1.2 before installing v${PACKAGE_VERSION}`,
     );
   }
   return value as InstallManifest;

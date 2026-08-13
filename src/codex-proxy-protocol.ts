@@ -1,4 +1,5 @@
-import type { ActivityPhase } from "./types.js";
+import { createHash } from "node:crypto";
+import type { ActivityPhase, ActivityProgress } from "./types.js";
 
 export interface CompleteSignal {
   type: "complete";
@@ -10,6 +11,8 @@ export interface CompleteSignal {
 export interface ActivitySignal {
   type: "activity";
   phase: ActivityPhase;
+  source: "reasoning" | "tool";
+  progress: ActivityProgress;
 }
 
 export interface FailedSignal {
@@ -75,6 +78,52 @@ function isMessageItem(type: unknown): boolean {
   return type === "agent_message" || type === "message";
 }
 
+function itemKey(item: Record<string, unknown>): string | undefined {
+  if (typeof item.id !== "string" || item.id === "") return undefined;
+  return createHash("sha256").update(item.id).digest("base64url");
+}
+
+function isActivityMilestone(count: number): boolean {
+  if (count <= 5) return true;
+  if (count <= 20) return count % 5 === 0;
+  return count % 10 === 0;
+}
+
+function isToolCountMilestone(count: number): boolean {
+  if (count <= 0) return false;
+  if (count <= 20) return count % 5 === 0;
+  return count % 10 === 0;
+}
+
+/**
+ * Allows exact early updates and slow tool updates while coalescing a rapid
+ * burst into deterministic milestones. No event content enters this gate.
+ */
+export class ActivityUpdateGate {
+  private lastPublishedAt: number | undefined;
+
+  constructor(
+    private readonly minimumIntervalMs = 1_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  shouldPublish(signal: ActivitySignal): boolean {
+    const current = this.now();
+    const elapsed =
+      this.lastPublishedAt === undefined ||
+      current - this.lastPublishedAt >= this.minimumIntervalMs;
+    const activityCount =
+      signal.progress.reasoningCount + signal.progress.toolCount;
+    const milestone =
+      isActivityMilestone(activityCount) ||
+      (signal.source === "tool" &&
+        isToolCountMilestone(signal.progress.toolCount));
+    if (!elapsed && !milestone) return false;
+    this.lastPublishedAt = current;
+    return true;
+  }
+}
+
 /**
  * Converts a raw Codex exec JSONL stream into a privacy-safe stream for
  * CC Connect. Raw reasoning and tool items are never forwarded while the
@@ -84,7 +133,12 @@ function isMessageItem(type: unknown): boolean {
 export class CodexProxyFilter {
   private pendingFinalText: string[] = [];
   private pendingFinalLines: string[] = [];
-  private activityEmitted = false;
+  private readonly seenReasoningKeys = new Set<string>();
+  private readonly seenToolKeys = new Set<string>();
+  private readonly identifiedToolsInFlight = new Set<string>();
+  private anonymousToolsInFlight = 0;
+  private reasoningCount = 0;
+  private toolCount = 0;
   private terminal = false;
 
   get terminalHandled(): boolean {
@@ -96,14 +150,69 @@ export class CodexProxyFilter {
     this.pendingFinalLines = [];
   }
 
-  private activity(): FilterResult {
+  private activity(
+    phase: ActivityPhase,
+    source: ActivitySignal["source"],
+  ): FilterResult {
     this.clearPendingFinal();
-    if (this.activityEmitted) return { forward: [] };
-    this.activityEmitted = true;
     return {
       forward: [],
-      signal: { type: "activity", phase: "working" },
+      signal: {
+        type: "activity",
+        phase,
+        source,
+        progress: {
+          reasoningCount: this.reasoningCount,
+          toolCount: this.toolCount,
+        },
+      },
     };
+  }
+
+  private reasoningCompleted(item: Record<string, unknown>): FilterResult {
+    this.clearPendingFinal();
+    const key = itemKey(item);
+    if (key && this.seenReasoningKeys.has(key)) return { forward: [] };
+    if (key) this.seenReasoningKeys.add(key);
+    this.reasoningCount += 1;
+    return this.activity("analyzing", "reasoning");
+  }
+
+  private toolStarted(item: Record<string, unknown>): FilterResult {
+    this.clearPendingFinal();
+    const key = itemKey(item);
+    if (key) {
+      if (this.seenToolKeys.has(key)) return { forward: [] };
+      this.seenToolKeys.add(key);
+      this.identifiedToolsInFlight.add(key);
+    } else {
+      this.anonymousToolsInFlight += 1;
+    }
+    this.toolCount += 1;
+    return this.activity("working", "tool");
+  }
+
+  private toolCompleted(item: Record<string, unknown>): FilterResult {
+    this.clearPendingFinal();
+    const key = itemKey(item);
+    if (key) {
+      if (this.identifiedToolsInFlight.delete(key)) return { forward: [] };
+      if (this.seenToolKeys.has(key)) return { forward: [] };
+      this.seenToolKeys.add(key);
+      if (this.anonymousToolsInFlight > 0) {
+        this.anonymousToolsInFlight -= 1;
+        return { forward: [] };
+      }
+    } else if (this.anonymousToolsInFlight > 0) {
+      this.anonymousToolsInFlight -= 1;
+      return { forward: [] };
+    } else if (this.identifiedToolsInFlight.size > 0) {
+      const first = this.identifiedToolsInFlight.values().next().value;
+      if (first) this.identifiedToolsInFlight.delete(first);
+      return { forward: [] };
+    }
+    this.toolCount += 1;
+    return this.activity("working", "tool");
   }
 
   consume(line: string): FilterResult {
@@ -120,11 +229,16 @@ export class CodexProxyFilter {
     const eventType = event.type;
     if (eventType === "item.started") {
       const item = record(event.item);
+      if (!item) return { forward: [] };
       const itemType = item?.type;
-      if (isMessageItem(itemType) || itemType === "reasoning") {
+      if (itemType === "reasoning") {
+        this.clearPendingFinal();
         return { forward: [] };
       }
-      return this.activity();
+      if (isMessageItem(itemType) || itemType === "error") {
+        return { forward: [] };
+      }
+      return this.toolStarted(item);
     }
 
     if (eventType === "item.completed") {
@@ -139,10 +253,14 @@ export class CodexProxyFilter {
         }
         return { forward: [] };
       }
-      if (itemType === "reasoning" || itemType === "error") {
+      if (itemType === "reasoning") {
+        return this.reasoningCompleted(item);
+      }
+      if (itemType === "error") {
+        this.clearPendingFinal();
         return { forward: [] };
       }
-      return this.activity();
+      return this.toolCompleted(item);
     }
 
     if (eventType === "turn.completed") {

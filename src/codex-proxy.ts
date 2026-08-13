@@ -2,7 +2,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
-import { CodexProxyFilter, type ProxySignal } from "./codex-proxy-protocol.js";
+import {
+  ActivityUpdateGate,
+  CodexProxyFilter,
+  type ProxySignal,
+} from "./codex-proxy-protocol.js";
 import { TurnService } from "./turn-service.js";
 
 const REAL_COMMAND_FLAG = "--ccfp-real-command=";
@@ -98,9 +102,12 @@ async function passthrough(invocation: Invocation): Promise<number> {
 async function handleSignal(
   signal: ProxySignal,
   service: TurnService,
+  activityGate: ActivityUpdateGate,
 ): Promise<{ lines: string[]; fallback: boolean; handledFailure: boolean }> {
   if (signal.type === "activity") {
-    await service.activity(signal.phase).catch(() => undefined);
+    if (activityGate.shouldPublish(signal)) {
+      await service.activity(signal.phase, signal.progress).catch(() => undefined);
+    }
     return { lines: [], fallback: false, handledFailure: false };
   }
 
@@ -145,6 +152,7 @@ async function automaticCardProxy(invocation: Invocation): Promise<number> {
   if (invocation.configPath) process.env.CC_CONFIG_PATH = invocation.configPath;
   const service = new TurnService();
   const filter = new CodexProxyFilter();
+  const activityGate = new ActivityUpdateGate();
   let takeover: boolean | undefined;
   let handledFailure = false;
   let bufferedBytes = 0;
@@ -168,7 +176,7 @@ async function automaticCardProxy(invocation: Invocation): Promise<number> {
     const result = filter.consume(line);
     for (const forwarded of result.forward) await writeLine(forwarded);
     if (!result.signal) return;
-    const handled = await handleSignal(result.signal, service);
+    const handled = await handleSignal(result.signal, service, activityGate);
     for (const forwarded of handled.lines) await writeLine(forwarded);
     if (handled.fallback) takeover = false;
     if (handled.handledFailure) handledFailure = true;

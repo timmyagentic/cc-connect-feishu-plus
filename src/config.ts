@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { parse } from "smol-toml";
 import { configPath as defaultConfigPath } from "./paths.js";
+import { PACKAGE_VERSION } from "./version.js";
 import type {
   AgentType,
   FeishuPlatformConfig,
@@ -375,12 +376,12 @@ export function renderConfigForInstall(
   for (const project of selected) {
     if (project.agentType !== "codex") {
       throw new Error(
-        `project ${project.name} uses ${project.agentType}; v0.2.0 supports Codex exec only`,
+        `project ${project.name} uses ${project.agentType}; v${PACKAGE_VERSION} supports Codex exec only`,
       );
     }
     if (project.backend !== "exec") {
       throw new Error(
-        `project ${project.name} uses the ${project.backend} backend; v0.2.0 supports Codex exec only`,
+        `project ${project.name} uses the ${project.backend} backend; v${PACKAGE_VERSION} supports Codex exec only`,
       );
     }
   }

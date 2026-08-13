@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.2 - 2026-08-13
+
+- Establish a fully populated Card 2.0 message before any plugin update,
+  eliminating the visible blank-card window caused by placeholder conversion.
+- Delegate quoted delivery to CC Connect's live native `replyCtx`, so the card
+  binds to the exact inbound message instead of inferring a trigger from chat
+  history when other participants are active in the same thread.
+- Resolve redacted native status cards only when their sender matches the
+  authenticated bot identity; ambiguous concurrent bot messages fail closed.
+- Keep thread-isolated turns inside their Feishu topic even when
+  `reply_to_trigger = false`, using the topic root only as a routing anchor.
+- Remove the deprecated CardKit `id_convert` path. If direct CardKit delivery is
+  unavailable, retain the populated native card and progressively PATCH that
+  same message.
+- Follow Codex terminal semantics by keeping the last assistant message as the
+  final answer; later tool completions, todo lists, plans, and item updates can
+  no longer erase it.
+- Support atomic in-place upgrades from existing automatic-proxy releases while
+  preserving the original uninstall backup and official CC Connect binary.
+- Preserve and rewire every previously managed project during a scoped patch
+  upgrade before removing the old shared proxy runtime.
+
 ## 0.2.1 - 2026-08-13
 
 - Rename the generic tool phase from `正在执行操作…` to the clearer

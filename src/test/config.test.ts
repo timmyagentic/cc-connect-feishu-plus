@@ -68,6 +68,7 @@ test("parseConfig resolves credentials and native Codex command metadata", () =>
   const parsed = parseConfig(SAMPLE, env);
   assert.equal(parsed.projects.length, 2);
   assert.equal(parsed.projects[0]?.feishu.appSecret, "resolved-secret");
+  assert.equal(parsed.projects[0]?.feishu.replyToTrigger, true);
   assert.equal(parsed.projects[0]?.agentCommand, "codex");
   assert.equal(parsed.projects[0]?.backend, "exec");
   assert.deepEqual(parsed.projects[0]?.references, {
@@ -78,6 +79,7 @@ test("parseConfig resolves credentials and native Codex command metadata", () =>
     enclosureStyle: "code",
   });
   assert.equal(parsed.projects[1]?.feishu.baseUrl, "https://open.larksuite.com");
+  assert.equal(parsed.projects[1]?.feishu.replyToTrigger, true);
 });
 
 test("renderConfigForInstall wires only the automatic proxy and privacy display", () => {

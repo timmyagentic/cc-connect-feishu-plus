@@ -5,6 +5,7 @@ export interface FeishuPlatformConfig {
   appId: string;
   appSecret: string;
   baseUrl: string;
+  replyToTrigger: boolean;
 }
 
 export interface ReferenceDisplayConfig {

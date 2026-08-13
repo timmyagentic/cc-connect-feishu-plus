@@ -14,6 +14,7 @@ interface MessageItem {
   message_id?: string;
   msg_type?: string;
   parent_id?: string;
+  root_id?: string;
   sender?: {
     id?: string;
     sender_type?: string;
@@ -21,9 +22,14 @@ interface MessageItem {
   body?: { content?: string };
 }
 
+interface MessageResponseData {
+  message_id?: string;
+}
+
 export interface ChatMessageSnapshot {
   messageIds: ReadonlySet<string>;
-  triggerMessageId?: string;
+  botOpenId: string;
+  rootMessageId?: string;
 }
 
 interface TokenResponse {
@@ -31,6 +37,12 @@ interface TokenResponse {
   msg?: string;
   tenant_access_token?: string;
   expire?: number;
+}
+
+interface BotInfoResponse {
+  code: number;
+  msg?: string;
+  bot?: { open_id?: string };
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -51,6 +63,7 @@ export class FeishuApiError extends Error {
 
 export class FeishuClient {
   private token?: { value: string; expiresAt: number };
+  private botOpenIdValue?: string;
 
   constructor(
     readonly config: FeishuPlatformConfig,
@@ -129,25 +142,43 @@ export class FeishuClient {
     return data.items ?? [];
   }
 
+  private async botOpenId(): Promise<string> {
+    if (this.botOpenIdValue) return this.botOpenIdValue;
+    const token = await this.tenantToken();
+    const response = await this.fetchImpl(this.url("/open-apis/bot/v3/info"), {
+      method: "GET",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const body = (await response.json()) as BotInfoResponse;
+    const openId = body.bot?.open_id?.trim();
+    if (!response.ok || body.code !== 0 || !openId) {
+      throw new FeishuApiError(
+        `Feishu bot identity request failed${body.msg ? `: ${body.msg}` : ""}`,
+        { code: body.code, status: response.status },
+      );
+    }
+    this.botOpenIdValue = openId;
+    return openId;
+  }
+
   async checkChatHistoryAccess(chatId: string): Promise<number> {
     return (await this.recentMessages(chatId, 1)).length;
   }
 
   async captureMessageSnapshot(
     chatId: string,
-    userId?: string,
+    _userId?: string,
+    rootMessageId?: string,
   ): Promise<ChatMessageSnapshot> {
     const items = await this.recentMessages(chatId, 50);
-    const trigger = items.find(
-      (item) =>
-        item.sender?.sender_type === "user" &&
-        (!userId || item.sender.id === userId),
-    );
+    const botOpenId = await this.botOpenId();
     return {
       messageIds: new Set(
         items.flatMap((item) => (item.message_id ? [item.message_id] : [])),
       ),
-      ...(trigger?.message_id ? { triggerMessageId: trigger.message_id } : {}),
+      botOpenId,
+      ...(rootMessageId ? { rootMessageId } : {}),
     };
   }
 
@@ -159,9 +190,15 @@ export class FeishuClient {
   ): Promise<string> {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const items = await this.recentMessages(chatId, 50);
+      const isOwnedCard = (item: MessageItem): boolean =>
+        item.msg_type === "interactive" &&
+        item.sender?.id === snapshot.botOpenId &&
+        (item.sender.sender_type === undefined ||
+          item.sender.sender_type === "app") &&
+        (!snapshot.rootMessageId || item.root_id === snapshot.rootMessageId);
       const markerMatch = items.find(
         (item) =>
-          item.msg_type === "interactive" &&
+          isOwnedCard(item) &&
           typeof item.body?.content === "string" &&
           item.body.content.includes(marker),
       );
@@ -169,34 +206,68 @@ export class FeishuClient {
 
       const candidates = items.filter(
         (item) =>
-          item.msg_type === "interactive" &&
+          isOwnedCard(item) &&
           typeof item.message_id === "string" &&
-          !snapshot.messageIds.has(item.message_id) &&
-          (item.sender?.sender_type === undefined ||
-            item.sender.sender_type === "app"),
+          !snapshot.messageIds.has(item.message_id),
       );
-      const replyMatch = snapshot.triggerMessageId
-        ? candidates.find((item) => item.parent_id === snapshot.triggerMessageId)
-        : undefined;
-      const match =
-        replyMatch ?? (candidates.length === 1 ? candidates[0] : undefined);
+      const match = candidates.length === 1 ? candidates[0] : undefined;
       if (match?.message_id) return match.message_id;
       if (attempt + 1 < attempts) await delay(250);
     }
     throw new Error("could not resolve the placeholder Feishu message id");
   }
 
-  async convertMessageToCard(messageId: string): Promise<string | undefined> {
-    try {
-      const data = await this.request<{ card_id?: string }>(
-        "/open-apis/cardkit/v1/cards/id_convert",
-        { method: "POST", body: JSON.stringify({ message_id: messageId }) },
-      );
-      return data.card_id;
-    } catch (error) {
-      if (error instanceof FeishuApiError) return undefined;
-      throw error;
+  async createCardEntity(card: CardDocument): Promise<string> {
+    const data = await this.request<{ card_id?: string }>(
+      "/open-apis/cardkit/v1/cards",
+      {
+        method: "POST",
+        body: JSON.stringify({ type: "card_json", data: JSON.stringify(card) }),
+      },
+    );
+    if (!data.card_id) {
+      throw new FeishuApiError("Feishu create card entity returned no card_id");
     }
+    return data.card_id;
+  }
+
+  async sendCardEntity(
+    chatId: string,
+    cardId: string,
+    triggerMessageId?: string,
+    replyInThread = false,
+  ): Promise<string> {
+    const content = JSON.stringify({
+      type: "card",
+      data: { card_id: cardId },
+    });
+    const data = triggerMessageId
+      ? await this.request<MessageResponseData>(
+          `/open-apis/im/v1/messages/${encodeURIComponent(triggerMessageId)}/reply`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              msg_type: "interactive",
+              content,
+              ...(replyInThread ? { reply_in_thread: true } : {}),
+            }),
+          },
+        )
+      : await this.request<MessageResponseData>(
+          "/open-apis/im/v1/messages?receive_id_type=chat_id",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              receive_id: chatId,
+              msg_type: "interactive",
+              content,
+            }),
+          },
+        );
+    if (!data.message_id) {
+      throw new FeishuApiError("Feishu send card entity returned no message_id");
+    }
+    return data.message_id;
   }
 
   async patchMessage(messageId: string, card: CardDocument): Promise<void> {

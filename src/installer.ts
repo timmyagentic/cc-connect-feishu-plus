@@ -9,7 +9,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderConfigForInstall } from "./config.js";
 import {
@@ -81,6 +81,17 @@ async function installRuntime(source: string, target: string): Promise<string> {
   return sha256File(target);
 }
 
+async function removeManagedRuntimeDirectory(
+  executablePath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const root = join(pluginDataDir(env), "runtime");
+  const directory = dirname(executablePath);
+  const child = relative(root, directory);
+  if (!child || child.startsWith("..") || isAbsolute(child)) return;
+  await rm(directory, { recursive: true, force: true });
+}
+
 export interface InstallOptions {
   configPath?: string;
   projectNames?: string[];
@@ -112,13 +123,33 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
   const legacyCheck = options.legacyMcpConfigured ?? legacyMcpIsConfigured;
   const original = await readFile(path);
   const originalText = original.toString("utf8");
+  const unknownManifest = await readUnknownManifest(env);
+  const existing = unknownManifest
+    ? requireCurrentManifest(unknownManifest)
+    : undefined;
+  if (
+    existing &&
+    (existing.configPath !== path || sha256(original) !== existing.configAfterSha256)
+  ) {
+    throw new Error(
+      "an install manifest already exists but the managed config changed; run doctor before reinstalling",
+    );
+  }
+  const projectNames = existing
+    ? [
+        ...new Set([
+          ...existing.projects.map((project) => project.name),
+          ...(options.projectNames ?? []),
+        ]),
+      ]
+    : options.projectNames;
   const rendered = renderConfigForInstall(
     originalText,
     {
       nodeExecutablePath,
       runtimeExecutablePath: runtimeTarget,
       configPath: path,
-      ...(options.projectNames ? { projectNames: options.projectNames } : {}),
+      ...(projectNames ? { projectNames } : {}),
     },
     env,
   );
@@ -139,23 +170,11 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
     );
   }
 
-  const unknownManifest = await readUnknownManifest(env);
-  if (unknownManifest) {
-    const existing = requireCurrentManifest(unknownManifest);
-    const currentHash = sha256(original);
+  if (existing) {
     const runtimeMatches =
       existing.nodeExecutablePath === nodeExecutablePath &&
       existing.runtimeExecutablePath === runtimeTarget &&
       existing.runtimeExecutableSha256 === sourceRuntimeHash;
-    if (
-      existing.configPath !== path ||
-      currentHash !== existing.configAfterSha256 ||
-      rendered.text !== originalText
-    ) {
-      throw new Error(
-        "an install manifest already exists but the managed config changed; run doctor before reinstalling",
-      );
-    }
     const hostMatches =
       !existing.ccBinarySha256 || hostBefore.sha256 === existing.ccBinarySha256;
     let installedRuntimeMatches = false;
@@ -166,20 +185,62 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
     } catch {
       installedRuntimeMatches = false;
     }
-    const changed = !runtimeMatches || !installedRuntimeMatches;
+    const configMatches = rendered.text === originalText;
+    const changed = !runtimeMatches || !installedRuntimeMatches || !configMatches;
     if (!options.dryRun && changed) {
-      if (!runtimeMatches) {
-        throw new Error(
-          "the installed proxy belongs to another package version; uninstall before upgrading",
+      const originalMode = (await stat(path)).mode & 0o777;
+      try {
+        const installedRuntimeHash = await installRuntime(runtimeSource, runtimeTarget);
+        if (installedRuntimeHash !== sourceRuntimeHash) {
+          throw new Error("installed proxy runtime failed its integrity check");
+        }
+        if (!configMatches) {
+          await atomicWrite(path, rendered.text, originalMode);
+        }
+
+        const hostAfter = await discoverHostBinary(env);
+        if (
+          !hostAfter ||
+          hostAfter.path !== hostBefore.path ||
+          hostAfter.sha256 !== hostBefore.sha256
+        ) {
+          throw new Error("official CC Connect binary changed during installation");
+        }
+
+        const upgraded: InstallManifest = {
+          ...existing,
+          packageVersion: PACKAGE_VERSION,
+          configAfterSha256: sha256(rendered.text),
+          nodeExecutablePath,
+          runtimeExecutablePath: runtimeTarget,
+          runtimeExecutableSha256: installedRuntimeHash,
+          projects: rendered.projects,
+        };
+        await atomicWrite(
+          manifestPath(env),
+          `${JSON.stringify(upgraded, null, 2)}\n`,
+          0o600,
         );
+        if (existing.runtimeExecutablePath !== runtimeTarget) {
+          await removeManagedRuntimeDirectory(existing.runtimeExecutablePath, env).catch(
+            () => undefined,
+          );
+        }
+      } catch (error) {
+        if (!configMatches) {
+          await atomicWrite(path, original, originalMode).catch(() => undefined);
+        }
+        if (existing.runtimeExecutablePath !== runtimeTarget) {
+          await removeManagedRuntimeDirectory(runtimeTarget, env).catch(() => undefined);
+        }
+        throw error;
       }
-      await installRuntime(runtimeSource, runtimeTarget);
     }
     return {
       changed,
       dryRun: Boolean(options.dryRun),
       configPath: path,
-      projects: existing.projects,
+      projects: rendered.projects,
       agents: ["codex"],
       nodeExecutablePath,
       runtimeExecutablePath: runtimeTarget,

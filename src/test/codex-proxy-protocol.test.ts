@@ -290,6 +290,93 @@ test("an agent message before a tool is treated as private intermediate text", (
   );
 });
 
+test("the last assistant message replaces earlier commentary", () => {
+  const filter = new CodexProxyFilter();
+  filter.consume(
+    line({
+      type: "item.completed",
+      item: { type: "agent_message", text: "中间播报" },
+    }),
+  );
+  filter.consume(
+    line({
+      type: "item.completed",
+      item: { type: "agent_message", text: "最终交付" },
+    }),
+  );
+  const result = filter.consume(line({ type: "turn.completed" }));
+  assert.equal(
+    result.signal?.type === "complete" ? result.signal.markdown : undefined,
+    "最终交付",
+  );
+});
+
+test("a valid final answer survives completion of a tool that started earlier", () => {
+  const filter = new CodexProxyFilter();
+  filter.consume(
+    line({
+      type: "item.started",
+      item: { id: "tool_1", type: "command_execution", command: "PRIVATE" },
+    }),
+  );
+  filter.consume(
+    line({
+      type: "item.completed",
+      item: { id: "final_1", type: "agent_message", text: "完整最终答案" },
+    }),
+  );
+  filter.consume(
+    line({
+      type: "item.completed",
+      item: {
+        id: "tool_1",
+        type: "command_execution",
+        aggregated_output: "PRIVATE_OUTPUT",
+      },
+    }),
+  );
+
+  const result = filter.consume(line({ type: "turn.completed" }));
+  assert.equal(
+    result.signal?.type === "complete" ? result.signal.markdown : undefined,
+    "完整最终答案",
+  );
+});
+
+test("terminal todo-list housekeeping is neither a tool nor a final-answer reset", () => {
+  const filter = new CodexProxyFilter();
+  assert.deepEqual(
+    filter.consume(
+      line({
+        type: "item.started",
+        item: { id: "todo_1", type: "todo_list", items: [] },
+      }),
+    ),
+    { forward: [] },
+  );
+  filter.consume(
+    line({
+      type: "item.completed",
+      item: { id: "final_1", type: "agent_message", text: "不会被收尾清空" },
+    }),
+  );
+  assert.deepEqual(
+    filter.consume(
+      line({
+        type: "item.completed",
+        item: { id: "todo_1", type: "todo_list", items: [] },
+      }),
+    ),
+    { forward: [] },
+  );
+
+  const result = filter.consume(line({ type: "turn.completed" }));
+  assert.equal(
+    result.signal?.type === "complete" ? result.signal.markdown : undefined,
+    "不会被收尾清空",
+  );
+});
+
 test("handled failure replaces raw error details with a silent native completion", () => {
   const filter = new CodexProxyFilter();
   const result = filter.consume(

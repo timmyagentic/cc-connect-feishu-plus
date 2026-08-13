@@ -105,6 +105,7 @@ function parseFeishuPlatform(
       env,
     ),
     baseUrl: platformBaseUrl(platform.type, options),
+    replyToTrigger: options.reply_to_trigger !== false,
   };
 }
 

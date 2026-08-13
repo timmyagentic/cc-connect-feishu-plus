@@ -32,6 +32,11 @@ export type ActivityPhase =
   | "verifying"
   | "preparing_answer";
 
+export interface ActivityProgress {
+  reasoningCount: number;
+  toolCount: number;
+}
+
 export type CardTransport = "cardkit" | "message_patch";
 
 export interface TurnState {
@@ -46,6 +51,7 @@ export interface TurnState {
   transport: CardTransport;
   sequence: number;
   phase: ActivityPhase;
+  progress?: ActivityProgress;
   streamingStarted?: boolean;
   draftMarkdown?: string;
   startedAt: string;

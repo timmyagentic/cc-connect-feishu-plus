@@ -176,6 +176,37 @@ test("turn_activity cannot erase an answer draft", async (t) => {
   await assert.rejects(service.activity("working"), /cannot replace answer text/);
 });
 
+test("turn_activity renders anonymous progress and preparing answer removes it", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const client = new FakeClient("card_123");
+  const service = new TurnService({
+    env: { CC_PROJECT: "demo", CC_SESSION_KEY: "feishu:oc_chat:ou_user" },
+    store: new TurnStateStore(directory),
+    loadProject: async () => project,
+    sendMarkdown: async () => undefined,
+    createClient: () => client as unknown as FeishuClient,
+    sleep: async () => undefined,
+  });
+
+  await service.begin();
+  await service.activity("working", { reasoningCount: 2, toolCount: 7 });
+  const progressCard = JSON.stringify(client.cardUpdates.at(-1)?.card);
+  assert.match(progressCard, /正在调用工具/);
+  assert.match(progressCard, /推理 2 次/);
+  assert.match(progressCard, /工具 7 次/);
+  assert.doesNotMatch(progressCard, /collapsible_panel|expanded/);
+
+  await service.activity("working", { reasoningCount: 1, toolCount: 3 });
+  const nonRegressingCard = JSON.stringify(client.cardUpdates.at(-1)?.card);
+  assert.match(nonRegressingCard, /推理 2 次/);
+  assert.match(nonRegressingCard, /工具 7 次/);
+
+  await service.activity("preparing_answer");
+  const preparingCard = JSON.stringify(client.cardUpdates.at(-1)?.card);
+  assert.doesNotMatch(preparingCard, /推理 2 次|工具 7 次/);
+});
+
 test("final plugin card applies the project's compact file-reference display", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

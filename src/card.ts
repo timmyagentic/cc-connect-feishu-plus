@@ -1,4 +1,4 @@
-import type { ActivityPhase } from "./types.js";
+import type { ActivityPhase, ActivityProgress } from "./types.js";
 
 export interface CardDocument {
   schema: "2.0";
@@ -25,7 +25,7 @@ export interface CardDocument {
 
 const PHASE_LABELS: Record<ActivityPhase, string> = {
   analyzing: "正在思考…",
-  working: "正在执行操作…",
+  working: "正在调用工具…",
   verifying: "正在核对结果…",
   preparing_answer: "正在整理回答…",
 };
@@ -62,24 +62,37 @@ function answerElement(markdown: string): Record<string, unknown> {
   };
 }
 
-export function workingCard(phase: ActivityPhase): CardDocument {
+function progressLabel(progress: ActivityProgress): string {
+  return `推理 ${progress.reasoningCount} 次 · 工具 ${progress.toolCount} 次`;
+}
+
+export function workingCard(
+  phase: ActivityPhase,
+  progress?: ActivityProgress,
+): CardDocument {
+  const label = phaseLabel(phase);
+  const progressText = progress ? progressLabel(progress) : undefined;
   return {
     schema: "2.0",
     config: {
       update_multi: true,
       streaming_mode: false,
-      summary: { content: phaseLabel(phase) },
+      summary: { content: progressText ? `${label} · ${progressText}` : label },
     },
     header: {
       template: "blue",
-      title: { tag: "plain_text", content: `⏳ ${phaseLabel(phase)}` },
+      title: { tag: "plain_text", content: `⏳ ${label}` },
     },
     body: {
       direction: "vertical",
       padding: "12px 12px 12px 12px",
       elements: [
         answerElement(
-          `${phaseLabel(phase)}\n\n> 🔒 推理与工具详情不会展示，也无法展开。`,
+          [
+            label,
+            ...(progressText ? [`**进度**：${progressText}`] : []),
+            "> 🔒 推理与工具详情不会展示，也无法展开。",
+          ].join("\n\n"),
         ),
       ],
     },

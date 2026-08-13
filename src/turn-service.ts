@@ -15,6 +15,7 @@ import { transformLocalReferences } from "./references.js";
 import { TurnStateStore } from "./state.js";
 import type {
   ActivityPhase,
+  ActivityProgress,
   ProjectRuntimeConfig,
   TurnState,
 } from "./types.js";
@@ -73,6 +74,16 @@ function markerFor(turnId: string): string {
 
 function placeholderMarkdown(marker: string): string {
   return `**⏳ 正在思考…**\n\n🔒 推理与工具详情不会展示，也无法展开。\n\n[⁣](https://cc-connect-feishu-plus.invalid/turn/${marker})`;
+}
+
+function monotonicProgress(
+  previous: ActivityProgress | undefined,
+  next: ActivityProgress,
+): ActivityProgress {
+  return {
+    reasoningCount: Math.max(previous?.reasoningCount ?? 0, next.reasoningCount),
+    toolCount: Math.max(previous?.toolCount ?? 0, next.toolCount),
+  };
 }
 
 export class TurnService {
@@ -220,7 +231,10 @@ export class TurnService {
     });
   }
 
-  async activity(phase: ActivityPhase): Promise<void> {
+  async activity(
+    phase: ActivityPhase,
+    progress?: ActivityProgress,
+  ): Promise<void> {
     const context = this.requireContext();
     await this.locked(context.sessionKey, async () => {
       const { state, client } = await this.requireTurn(context);
@@ -228,7 +242,12 @@ export class TurnService {
         throw new Error("turn_activity cannot replace answer text after turn_write has started");
       }
       state.phase = phase;
-      await this.update(client, state, workingCard(phase));
+      const visibleProgress = progress
+        ? monotonicProgress(state.progress, progress)
+        : undefined;
+      if (visibleProgress) state.progress = visibleProgress;
+      else delete state.progress;
+      await this.update(client, state, workingCard(phase, visibleProgress));
       await this.store.save(state);
     });
   }

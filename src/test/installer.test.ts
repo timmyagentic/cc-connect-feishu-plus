@@ -71,7 +71,7 @@ test("dry-run describes proxy wiring without writing anything", async (t) => {
   assert.equal(result.changed, true);
   assert.equal(result.hostBinary?.unchanged, true);
   assert.equal(await readFile(item.configPath, "utf8"), CONFIG);
-  assert.match(result.runtimeExecutablePath, /feishu-plus\/runtime\/v0\.2\.0/);
+  assert.match(result.runtimeExecutablePath, /feishu-plus\/runtime\/v0\.2\.1/);
   await assert.rejects(stat(join(item.data, "feishu-plus")), /ENOENT/);
 });
 

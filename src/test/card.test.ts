@@ -9,9 +9,11 @@ import {
 } from "../card.js";
 
 test("working card exposes only a locked generic status with no expansion control", () => {
-  const card = workingCard("working");
+  const card = workingCard("working", { reasoningCount: 2, toolCount: 7 });
   const serialized = JSON.stringify(card);
-  assert.match(serialized, /正在执行操作/);
+  assert.match(serialized, /正在调用工具/);
+  assert.match(serialized, /推理 2 次/);
+  assert.match(serialized, /工具 7 次/);
   assert.match(serialized, /无法展开/);
   assert.doesNotMatch(serialized, /collapsible_panel|expanded|tool_name|command/);
 });
@@ -30,6 +32,7 @@ test("completed card is clean and has an explicit Done state", () => {
   assert.equal(card.config.streaming_mode, false);
   const serialized = JSON.stringify(card);
   assert.doesNotMatch(serialized, /token|context|workdir|model/i);
+  assert.doesNotMatch(serialized, /推理 \d+ 次|工具 \d+ 次/);
   assert.match(serialized, /最终答案/);
 });
 

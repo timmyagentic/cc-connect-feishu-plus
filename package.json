@@ -1,6 +1,6 @@
 {
   "name": "cc-connect-feishu-plus",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Automatic privacy-safe Feishu turn cards for CC Connect",
   "type": "module",
   "bin": {

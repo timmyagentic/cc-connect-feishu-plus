@@ -142,15 +142,20 @@ reply_to_trigger = true
     fakeCodex,
     `#!/usr/bin/env node
 process.stdin.resume();
-const events = [
+  const events = [
   { type: "thread.started", thread_id: "thread_1" },
   { type: "turn.started" },
-  { type: "item.completed", item: { type: "reasoning", text: "PRIVATE_REASONING_SENTINEL" } },
-  { type: "item.started", item: { type: "command_execution", command: "PRIVATE_TOOL_COMMAND_SENTINEL" } },
-  { type: "item.completed", item: { type: "command_execution", aggregated_output: "PRIVATE_TOOL_OUTPUT_SENTINEL" } },
+  { type: "item.completed", item: { id: "reasoning_1", type: "reasoning", text: "PRIVATE_REASONING_SENTINEL_1" } },
+  { type: "item.completed", item: { id: "reasoning_2", type: "reasoning", text: "PRIVATE_REASONING_SENTINEL_2" } },
+];
+for (let index = 1; index <= 10; index += 1) {
+  events.push({ type: "item.started", item: { id: \`tool_\${index}\`, type: "command_execution", command: \`PRIVATE_TOOL_COMMAND_SENTINEL_\${index}\` } });
+  events.push({ type: "item.completed", item: { id: \`tool_\${index}\`, type: "command_execution", aggregated_output: \`PRIVATE_TOOL_OUTPUT_SENTINEL_\${index}\` } });
+}
+events.push(
   { type: "item.completed", item: { type: "agent_message", text: "这是最终答案。" } },
   { type: "turn.completed", usage: { input_tokens: 12, output_tokens: 3 } },
-];
+);
 for (const event of events) console.log(JSON.stringify(event));
 `,
     { mode: 0o700 },
@@ -203,10 +208,13 @@ for (const event of events) console.log(JSON.stringify(event));
   assert.ok(cardBodies.length >= 4);
   const cards = cardBodies.join("\n");
   assert.match(cards, /正在思考/);
-  assert.match(cards, /正在执行操作/);
+  assert.match(cards, /正在调用工具/);
+  assert.match(cards, /推理 2 次/);
+  assert.match(cards, /工具 10 次/);
   assert.match(cards, /无法展开/);
   assert.match(cards, /这是最终答案/);
   assert.match(cards, /✅ Done/);
   assert.doesNotMatch(cards, /PRIVATE_REASONING|PRIVATE_TOOL/);
   assert.doesNotMatch(cards, /collapsible_panel|expanded/);
+  assert.ok(cardBodies.length < 18, `unexpected card update burst: ${cardBodies.length}`);
 });

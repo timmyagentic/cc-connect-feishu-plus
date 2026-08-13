@@ -136,3 +136,13 @@ test("chat-history snapshot succeeds without sending a message", async () => {
   assert.match(calls[1] ?? "", /page_size=50/);
   assert.ok(calls.every((url) => !url.includes("\/messages\/")));
 });
+
+test("read-only history permission check returns the visible item count", async () => {
+  const responses = [
+    jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 }),
+    jsonResponse({ code: 0, data: { items: [{ message_id: "om_1" }] } }),
+  ];
+  const fetchMock = async () => responses.shift() ?? jsonResponse({ code: 1 }, 500);
+  const client = new FeishuClient(config, fetchMock as typeof fetch);
+  assert.equal(await client.checkChatHistoryAccess("oc_chat"), 1);
+});

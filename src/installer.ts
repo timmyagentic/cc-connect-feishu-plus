@@ -1,31 +1,33 @@
 import { createHash } from "node:crypto";
 import {
   chmod,
+  copyFile,
   mkdir,
   readFile,
   rename,
+  rm,
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, join } from "node:path";
-import {
-  codexMcpContextEnvIsConfigured,
-  configureCodexMcpContextEnv,
-} from "./codex-mcp.js";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderConfigForInstall } from "./config.js";
 import {
   discoverHostBinary,
   sha256File,
   versionAtLeast,
 } from "./host-integrity.js";
-import { configPath as defaultConfigPath, manifestPath, pluginDataDir } from "./paths.js";
-import { runCommand, type CommandRunner } from "./process.js";
-import type { AgentType, InstallManifest } from "./types.js";
+import { legacyMcpIsConfigured } from "./legacy.js";
 import {
-  MCP_NAME,
+  configPath as defaultConfigPath,
+  manifestPath,
+  pluginDataDir,
+  runtimeExecutablePath,
+} from "./paths.js";
+import type { InstallManifest, InstalledProject } from "./types.js";
+import {
   MINIMUM_CC_CONNECT_VERSION,
   PACKAGE_VERSION,
-  RUNTIME_PACKAGE_SPEC,
 } from "./version.js";
 
 function sha256(value: string | Buffer): string {
@@ -43,47 +45,40 @@ function timestamp(): string {
   return new Date().toISOString().replaceAll(":", "-");
 }
 
-function runtimePackageSpec(packageVersion: string): string {
-  return `github:timmyagentic/cc-connect-feishu-plus#v${packageVersion}`;
+function bundledRuntimeSource(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), "runtime", "codex-proxy.mjs");
 }
 
-function registrationArgs(
-  agentType: AgentType,
-  configPath: string,
-  packageSpec = RUNTIME_PACKAGE_SPEC,
-): string[] {
-  const runtime = [
-    "npm",
-    "exec",
-    "--yes",
-    `--package=${packageSpec}`,
-    "--",
-    "cc-connect-feishu-plus",
-    "mcp",
-  ];
-  return agentType === "codex"
-    ? ["mcp", "add", MCP_NAME, "--env", `CC_CONFIG_PATH=${configPath}`, "--", ...runtime]
-    : [
-        "mcp",
-        "add",
-        "--scope",
-        "user",
-        MCP_NAME,
-        "-e",
-        `CC_CONFIG_PATH=${configPath}`,
-        "--",
-        ...runtime,
-      ];
+type UnknownManifest = Partial<InstallManifest> & { version?: number };
+
+async function readUnknownManifest(
+  env: NodeJS.ProcessEnv,
+): Promise<UnknownManifest | undefined> {
+  try {
+    return JSON.parse(await readFile(manifestPath(env), "utf8")) as UnknownManifest;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
-function removalArgs(agentType: AgentType): string[] {
-  return agentType === "codex"
-    ? ["mcp", "remove", MCP_NAME]
-    : ["mcp", "remove", "--scope", "user", MCP_NAME];
+function requireCurrentManifest(value: UnknownManifest): InstallManifest {
+  if (value.version !== 2) {
+    throw new Error(
+      "a legacy Feishu Plus MCP installation is still recorded; uninstall v0.1.2 before installing v0.2.0",
+    );
+  }
+  return value as InstallManifest;
 }
 
-function agentCommand(agentType: AgentType): string {
-  return agentType === "codex" ? "codex" : "claude";
+async function installRuntime(source: string, target: string): Promise<string> {
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+  await chmod(dirname(target), 0o700);
+  const temporary = `${target}.${process.pid}.tmp`;
+  await copyFile(source, temporary);
+  await chmod(temporary, 0o700);
+  await rename(temporary, target);
+  return sha256File(target);
 }
 
 export interface InstallOptions {
@@ -91,58 +86,44 @@ export interface InstallOptions {
   projectNames?: string[];
   dryRun?: boolean;
   env?: NodeJS.ProcessEnv;
-  commandRunner?: CommandRunner;
-  configureCodexContextEnv?: typeof configureCodexMcpContextEnv;
-  codexContextEnvIsConfigured?: typeof codexMcpContextEnvIsConfigured;
+  nodeExecutablePath?: string;
+  runtimeSourcePath?: string;
+  legacyMcpConfigured?: typeof legacyMcpIsConfigured;
 }
 
 export interface InstallResult {
   changed: boolean;
   dryRun: boolean;
   configPath: string;
-  projects: Array<{ name: string; agentType: AgentType }>;
-  agents: AgentType[];
+  projects: InstalledProject[];
+  agents: Array<"codex">;
+  nodeExecutablePath: string;
+  runtimeExecutablePath: string;
   hostBinary?: { path: string; sha256: string; unchanged: boolean };
   backupPath?: string;
-}
-
-async function readManifest(env: NodeJS.ProcessEnv): Promise<InstallManifest | undefined> {
-  try {
-    return JSON.parse(await readFile(manifestPath(env), "utf8")) as InstallManifest;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
-async function ensureMcpNameFree(
-  agentType: AgentType,
-  runner: CommandRunner,
-): Promise<void> {
-  const result = await runner(agentCommand(agentType), ["mcp", "get", MCP_NAME]);
-  if (result.code === 0) {
-    throw new Error(
-      `${MCP_NAME} is already registered in ${agentType}; refusing to overwrite it`,
-    );
-  }
 }
 
 export async function install(options: InstallOptions = {}): Promise<InstallResult> {
   const env = options.env ?? process.env;
   const path = options.configPath ?? defaultConfigPath(env);
-  const runner = options.commandRunner ?? runCommand;
-  const configureCodexContextEnv =
-    options.configureCodexContextEnv ?? configureCodexMcpContextEnv;
-  const contextEnvIsConfigured =
-    options.codexContextEnvIsConfigured ?? codexMcpContextEnvIsConfigured;
+  const nodeExecutablePath = options.nodeExecutablePath ?? process.execPath;
+  const runtimeTarget = runtimeExecutablePath(PACKAGE_VERSION, env);
+  const runtimeSource = options.runtimeSourcePath ?? bundledRuntimeSource();
+  const legacyCheck = options.legacyMcpConfigured ?? legacyMcpIsConfigured;
   const original = await readFile(path);
   const originalText = original.toString("utf8");
   const rendered = renderConfigForInstall(
     originalText,
-    { ...(options.projectNames ? { projectNames: options.projectNames } : {}) },
+    {
+      nodeExecutablePath,
+      runtimeExecutablePath: runtimeTarget,
+      configPath: path,
+      ...(options.projectNames ? { projectNames: options.projectNames } : {}),
+    },
     env,
   );
-  const agents = [...new Set(rendered.projects.map((project) => project.agentType))];
+  const sourceRuntimeHash = await sha256File(runtimeSource);
+
   const hostBefore = await discoverHostBinary(env);
   if (!hostBefore) {
     throw new Error(
@@ -157,10 +138,15 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       `CC Connect ${MINIMUM_CC_CONNECT_VERSION} or newer is required (found ${hostBefore.version ?? "unknown"})`,
     );
   }
-  const existing = await readManifest(env);
 
-  if (existing) {
+  const unknownManifest = await readUnknownManifest(env);
+  if (unknownManifest) {
+    const existing = requireCurrentManifest(unknownManifest);
     const currentHash = sha256(original);
+    const runtimeMatches =
+      existing.nodeExecutablePath === nodeExecutablePath &&
+      existing.runtimeExecutablePath === runtimeTarget &&
+      existing.runtimeExecutableSha256 === sourceRuntimeHash;
     if (
       existing.configPath !== path ||
       currentHash !== existing.configAfterSha256 ||
@@ -170,104 +156,42 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
         "an install manifest already exists but the managed config changed; run doctor before reinstalling",
       );
     }
-
-    const registeredAgents = existing.mcpRegistrations.map(
-      (registration) => registration.agentType,
-    );
-    const needsContextRepair =
-      registeredAgents.includes("codex") && !(await contextEnvIsConfigured(env));
-    const needsRuntimeUpgrade = existing.packageVersion !== PACKAGE_VERSION;
-    if (options.dryRun) {
-      return {
-        changed: needsContextRepair || needsRuntimeUpgrade,
-        dryRun: true,
-        configPath: path,
-        projects: existing.projects,
-        agents: registeredAgents,
-        ...(hostBefore
-          ? { hostBinary: { ...hostBefore, unchanged: hostBefore.sha256 === existing.ccBinarySha256 } }
-          : {}),
-        backupPath: existing.backupPath,
-      };
+    const hostMatches =
+      !existing.ccBinarySha256 || hostBefore.sha256 === existing.ccBinarySha256;
+    let installedRuntimeMatches = false;
+    try {
+      installedRuntimeMatches =
+        (await sha256File(existing.runtimeExecutablePath)) ===
+        existing.runtimeExecutableSha256;
+    } catch {
+      installedRuntimeMatches = false;
     }
-
-    if (needsRuntimeUpgrade) {
-      const previousSpec = runtimePackageSpec(existing.packageVersion);
-      const touched: AgentType[] = [];
-      try {
-        for (const registration of existing.mcpRegistrations) {
-          const agent = registration.agentType;
-          const removed = await runner(agentCommand(agent), removalArgs(agent));
-          if (removed.code !== 0) {
-            throw new Error(`failed to remove the previous ${MCP_NAME} ${agent} registration`);
-          }
-          touched.push(agent);
-          const added = await runner(
-            agentCommand(agent),
-            registrationArgs(agent, path),
-          );
-          if (added.code !== 0) {
-            throw new Error(`failed to upgrade ${MCP_NAME} in ${agent}`);
-          }
-          if (agent === "codex") await configureCodexContextEnv(env);
-        }
-        const hostAfterRegistration = await discoverHostBinary(env);
-        if (
-          !hostAfterRegistration ||
-          hostAfterRegistration.path !== hostBefore.path ||
-          hostAfterRegistration.sha256 !== hostBefore.sha256
-        ) {
-          throw new Error("official CC Connect binary changed during installation upgrade");
-        }
-        await atomicWrite(
-          manifestPath(env),
-          `${JSON.stringify(
-            {
-              ...existing,
-              packageVersion: PACKAGE_VERSION,
-              updatedAt: new Date().toISOString(),
-            },
-            null,
-            2,
-          )}\n`,
-          0o600,
+    const changed = !runtimeMatches || !installedRuntimeMatches;
+    if (!options.dryRun && changed) {
+      if (!runtimeMatches) {
+        throw new Error(
+          "the installed proxy belongs to another package version; uninstall before upgrading",
         );
-      } catch (error) {
-        for (const agent of touched.reverse()) {
-          await runner(agentCommand(agent), removalArgs(agent)).catch(() => undefined);
-          await runner(
-            agentCommand(agent),
-            registrationArgs(agent, path, previousSpec),
-          ).catch(() => undefined);
-          if (agent === "codex") {
-            await configureCodexContextEnv(env).catch(() => undefined);
-          }
-        }
-        throw error;
       }
-    } else if (needsContextRepair) {
-      await configureCodexContextEnv(env);
+      await installRuntime(runtimeSource, runtimeTarget);
     }
-
-    const hostAfter = await discoverHostBinary(env);
     return {
-      changed: needsContextRepair || needsRuntimeUpgrade,
-      dryRun: false,
+      changed,
+      dryRun: Boolean(options.dryRun),
       configPath: path,
       projects: existing.projects,
-      agents: registeredAgents,
-      ...(hostAfter
-        ? {
-            hostBinary: {
-              ...hostAfter,
-              unchanged:
-                !existing.ccBinarySha256 ||
-                hostAfter.sha256 === existing.ccBinarySha256,
-            },
-          }
-        : {}),
+      agents: ["codex"],
+      nodeExecutablePath,
+      runtimeExecutablePath: runtimeTarget,
+      hostBinary: { ...hostBefore, unchanged: hostMatches },
       backupPath: existing.backupPath,
     };
+  }
+
+  if (await legacyCheck(env)) {
+    throw new Error(
+      "legacy Codex MCP registration feishu_plus is still present; uninstall v0.1.2 before installing the automatic proxy runtime",
+    );
   }
 
   if (options.dryRun) {
@@ -276,12 +200,12 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       dryRun: true,
       configPath: path,
       projects: rendered.projects,
-      agents,
-      ...(hostBefore ? { hostBinary: { ...hostBefore, unchanged: true } } : {}),
+      agents: ["codex"],
+      nodeExecutablePath,
+      runtimeExecutablePath: runtimeTarget,
+      hostBinary: { ...hostBefore, unchanged: true },
     };
   }
-
-  for (const agent of agents) await ensureMcpNameFree(agent, runner);
 
   const directory = pluginDataDir(env);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -289,43 +213,37 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
   const backupPath = join(directory, `${basename(path)}.${timestamp()}.bak`);
   await writeFile(backupPath, original, { mode: 0o600, flag: "wx" });
   const originalMode = (await stat(path)).mode & 0o777;
-  const registered: AgentType[] = [];
 
   try {
-    for (const agent of agents) {
-      const result = await runner(agentCommand(agent), registrationArgs(agent, path));
-      if (result.code !== 0) {
-        throw new Error(`failed to register ${MCP_NAME} in ${agent}`);
-      }
-      registered.push(agent);
-      if (agent === "codex") await configureCodexContextEnv(env);
+    const installedRuntimeHash = await installRuntime(runtimeSource, runtimeTarget);
+    if (installedRuntimeHash !== sourceRuntimeHash) {
+      throw new Error("installed proxy runtime failed its integrity check");
     }
-
     await atomicWrite(path, rendered.text, originalMode);
+
     const hostAfter = await discoverHostBinary(env);
     if (
-      hostBefore &&
-      (!hostAfter || hostAfter.path !== hostBefore.path || hostAfter.sha256 !== hostBefore.sha256)
+      !hostAfter ||
+      hostAfter.path !== hostBefore.path ||
+      hostAfter.sha256 !== hostBefore.sha256
     ) {
       throw new Error("official CC Connect binary changed during installation");
     }
 
     const manifest: InstallManifest = {
-      version: 1,
+      version: 2,
       packageVersion: PACKAGE_VERSION,
       installedAt: new Date().toISOString(),
       configPath: path,
       backupPath,
       configBeforeSha256: sha256(original),
       configAfterSha256: sha256(rendered.text),
-      ...(hostBefore
-        ? { ccBinaryPath: hostBefore.path, ccBinarySha256: hostBefore.sha256 }
-        : {}),
+      ccBinaryPath: hostBefore.path,
+      ccBinarySha256: hostBefore.sha256,
+      nodeExecutablePath,
+      runtimeExecutablePath: runtimeTarget,
+      runtimeExecutableSha256: installedRuntimeHash,
       projects: rendered.projects,
-      mcpRegistrations: registered.map((agentType) => ({
-        agentType,
-        name: MCP_NAME,
-      })),
     };
     await atomicWrite(manifestPath(env), `${JSON.stringify(manifest, null, 2)}\n`, 0o600);
 
@@ -334,22 +252,23 @@ export async function install(options: InstallOptions = {}): Promise<InstallResu
       dryRun: false,
       configPath: path,
       projects: rendered.projects,
-      agents,
-      ...(hostAfter ? { hostBinary: { ...hostAfter, unchanged: true } } : {}),
+      agents: ["codex"],
+      nodeExecutablePath,
+      runtimeExecutablePath: runtimeTarget,
+      hostBinary: { ...hostAfter, unchanged: true },
       backupPath,
     };
   } catch (error) {
     await atomicWrite(path, original, originalMode).catch(() => undefined);
-    for (const agent of registered.reverse()) {
-      await runner(agentCommand(agent), removalArgs(agent)).catch(() => undefined);
-    }
+    await rm(dirname(runtimeTarget), { recursive: true, force: true }).catch(
+      () => undefined,
+    );
     throw error;
   }
 }
 
 export interface UninstallOptions {
   env?: NodeJS.ProcessEnv;
-  commandRunner?: CommandRunner;
 }
 
 export interface UninstallResult {
@@ -357,11 +276,13 @@ export interface UninstallResult {
   warnings: string[];
 }
 
-export async function uninstall(options: UninstallOptions = {}): Promise<UninstallResult> {
+export async function uninstall(
+  options: UninstallOptions = {},
+): Promise<UninstallResult> {
   const env = options.env ?? process.env;
-  const runner = options.commandRunner ?? runCommand;
-  const manifest = await readManifest(env);
-  if (!manifest) throw new Error("Feishu Plus is not installed");
+  const unknownManifest = await readUnknownManifest(env);
+  if (!unknownManifest) throw new Error("Feishu Plus is not installed");
+  const manifest = requireCurrentManifest(unknownManifest);
 
   const current = await readFile(manifest.configPath);
   if (sha256(current) !== manifest.configAfterSha256) {
@@ -377,14 +298,13 @@ export async function uninstall(options: UninstallOptions = {}): Promise<Uninsta
   await atomicWrite(manifest.configPath, backup, mode);
 
   const warnings: string[] = [];
-  for (const registration of manifest.mcpRegistrations) {
-    const result = await runner(
-      agentCommand(registration.agentType),
-      removalArgs(registration.agentType),
-    );
-    if (result.code !== 0) {
-      warnings.push(`${registration.agentType} MCP removal failed; remove ${MCP_NAME} manually`);
-    }
+  try {
+    await rm(dirname(manifest.runtimeExecutablePath), {
+      recursive: true,
+      force: true,
+    });
+  } catch {
+    warnings.push("proxy runtime cleanup failed; remove the recorded runtime directory manually");
   }
   const historyPath = join(
     pluginDataDir(env),
@@ -392,17 +312,24 @@ export async function uninstall(options: UninstallOptions = {}): Promise<Uninsta
   );
   await atomicWrite(
     historyPath,
-    `${JSON.stringify({ ...manifest, uninstalledAt: new Date().toISOString() }, null, 2)}\n`,
+    `${JSON.stringify(
+      { ...manifest, uninstalledAt: new Date().toISOString() },
+      null,
+      2,
+    )}\n`,
     0o600,
   );
-  await rename(manifestPath(env), `${historyPath}.installed-record`);
+  await rm(manifestPath(env));
   return { manifest, warnings };
 }
 
 export async function verifyHostAgainstManifest(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ current?: string; installed?: string; unchanged?: boolean }> {
-  const manifest = await readManifest(env);
+  const unknownManifest = await readUnknownManifest(env);
+  const manifest = unknownManifest?.version === 2
+    ? (unknownManifest as InstallManifest)
+    : undefined;
   const host = await discoverHostBinary(env);
   if (!host) return {};
   return {

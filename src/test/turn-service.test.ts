@@ -56,6 +56,8 @@ class FakeClient {
 const project: ProjectRuntimeConfig = {
   name: "demo",
   agentType: "codex",
+  agentCommand: "codex",
+  backend: "exec",
   feishu: {
     type: "feishu",
     appId: "cli_test",
@@ -100,7 +102,8 @@ test("CardKit lifecycle keeps one quoted message and ends in Done", async (t) =>
   assert.equal(begin.active, true);
   assert.equal(begin.transport, "cardkit");
   assert.equal(sent.length, 1);
-  assert.match(sent[0] ?? "", /正在处理/);
+  assert.match(sent[0] ?? "", /正在思考/);
+  assert.match(sent[0] ?? "", /无法展开/);
 
   await service.activity("verifying");
   await service.complete("这是最终答案。\n\n```ts\nconst ok = true;\n```");
@@ -171,6 +174,32 @@ test("turn_activity cannot erase an answer draft", async (t) => {
   await service.begin();
   await service.write("可见正文");
   await assert.rejects(service.activity("working"), /cannot replace answer text/);
+});
+
+test("final plugin card applies the project's compact file-reference display", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ccfp-state-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const client = new FakeClient("card_123");
+  const service = new TurnService({
+    env: { CC_PROJECT: "demo", CC_SESSION_KEY: "feishu:oc_chat:ou_user" },
+    store: new TurnStateStore(directory),
+    loadProject: async () => ({
+      ...project,
+      references: {
+        normalizeAgents: ["codex"],
+        renderPlatforms: ["feishu"],
+        displayPath: "smart",
+        markerStyle: "emoji",
+        enclosureStyle: "code",
+      },
+    }),
+    sendMarkdown: async () => undefined,
+    createClient: () => client as unknown as FeishuClient,
+    sleep: async () => undefined,
+  });
+  await service.begin();
+  await service.complete("See /very/long/private/path/app.ts:42");
+  assert.equal(client.textUpdates[0]?.content, "See 📄 `app.ts:42`");
 });
 
 test("non-Feishu turn remains native and sends nothing", async () => {

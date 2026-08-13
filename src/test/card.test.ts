@@ -5,7 +5,16 @@ import {
   estimatedAnimationMs,
   progressiveFrames,
   streamingCard,
+  workingCard,
 } from "../card.js";
+
+test("working card exposes only a locked generic status with no expansion control", () => {
+  const card = workingCard("working");
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /正在执行操作/);
+  assert.match(serialized, /无法展开/);
+  assert.doesNotMatch(serialized, /collapsible_panel|expanded|tool_name|command/);
+});
 
 test("streaming card uses one stable answer element and adaptive typewriter config", () => {
   const card = streamingCard("一个短回答");

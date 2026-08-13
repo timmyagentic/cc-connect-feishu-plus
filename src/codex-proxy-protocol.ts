@@ -83,8 +83,14 @@ function itemKey(item: Record<string, unknown>): string | undefined {
   return createHash("sha256").update(item.id).digest("base64url");
 }
 
-function isToolMilestone(count: number): boolean {
+function isActivityMilestone(count: number): boolean {
   if (count <= 5) return true;
+  if (count <= 20) return count % 5 === 0;
+  return count % 10 === 0;
+}
+
+function isToolCountMilestone(count: number): boolean {
+  if (count <= 0) return false;
   if (count <= 20) return count % 5 === 0;
   return count % 10 === 0;
 }
@@ -106,9 +112,12 @@ export class ActivityUpdateGate {
     const elapsed =
       this.lastPublishedAt === undefined ||
       current - this.lastPublishedAt >= this.minimumIntervalMs;
+    const activityCount =
+      signal.progress.reasoningCount + signal.progress.toolCount;
     const milestone =
-      signal.source === "reasoning" ||
-      isToolMilestone(signal.progress.toolCount);
+      isActivityMilestone(activityCount) ||
+      (signal.source === "tool" &&
+        isToolCountMilestone(signal.progress.toolCount));
     if (!elapsed && !milestone) return false;
     this.lastPublishedAt = current;
     return true;

@@ -220,8 +220,50 @@ test("activity update gate keeps early feedback, coalesces bursts, and refreshes
       source: "reasoning",
       progress: { reasoningCount: 1, toolCount: 31 },
     }),
+    false,
+  );
+  now += 1_000;
+  assert.equal(
+    gate.shouldPublish({
+      type: "activity",
+      phase: "analyzing",
+      source: "reasoning",
+      progress: { reasoningCount: 2, toolCount: 31 },
+    }),
     true,
   );
+});
+
+test("activity update gate coalesces rapid alternating reasoning and tool events", () => {
+  const gate = new ActivityUpdateGate(1_000, () => 10_000);
+  const published: Array<{ reasoningCount: number; toolCount: number }> = [];
+
+  for (let count = 1; count <= 5; count += 1) {
+    const reasoning: ActivitySignal = {
+      type: "activity",
+      phase: "analyzing",
+      source: "reasoning",
+      progress: { reasoningCount: count, toolCount: count - 1 },
+    };
+    if (gate.shouldPublish(reasoning)) published.push(reasoning.progress);
+
+    const toolSignal: ActivitySignal = {
+      type: "activity",
+      phase: "working",
+      source: "tool",
+      progress: { reasoningCount: count, toolCount: count },
+    };
+    if (gate.shouldPublish(toolSignal)) published.push(toolSignal.progress);
+  }
+
+  assert.deepEqual(published, [
+    { reasoningCount: 1, toolCount: 0 },
+    { reasoningCount: 1, toolCount: 1 },
+    { reasoningCount: 2, toolCount: 1 },
+    { reasoningCount: 2, toolCount: 2 },
+    { reasoningCount: 3, toolCount: 2 },
+    { reasoningCount: 5, toolCount: 5 },
+  ]);
 });
 
 test("an agent message before a tool is treated as private intermediate text", () => {
